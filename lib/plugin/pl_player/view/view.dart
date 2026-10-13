@@ -1823,9 +1823,6 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                     ..updateSubtitleStyle();
                 },
                 child: Obx(() {
-                  // 同 _videoWidget：渲染路径切换会替换 VideoController，
-                  // 订阅 generation 才能让字幕重新绑到新的 controller 上。
-                  final gen = plPlayerController.playerGeneration.value;
                   final videoController = plPlayerController.videoController;
                   if (videoController == null) {
                     return const SizedBox.shrink();
@@ -1844,7 +1841,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                       // 同 Video：_SubtitleViewState 只在 initState 订阅
                       // controller.player.stream.subtitle，didUpdateWidget
                       // 不会重新订阅，所以换了 controller 必须换 State。
-                      key: ValueKey(gen),
+                      key: ValueKey(videoController),
                       controller: videoController,
                       configuration: SubtitleViewConfiguration(
                         // 去掉 SubtitleView 内部 padding，外部手动管理
@@ -2645,6 +2642,10 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                 key: _videoKey,
                 child: Obx(
                   () {
+                    final videoController = plPlayerController.videoController;
+                    if (videoController == null) {
+                      return const SizedBox.shrink();
+                    }
                     final videoFit = plPlayerController.videoFit.value;
                     // 几何镜像：改这里的 FittedBox / flip / Transform 结构要同步 DanmakuMaskGeometry
                     return Transform.flip(
@@ -2654,7 +2655,13 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                         fit: videoFit.boxFit,
                         alignment: widget.alignment,
                         child: SimpleVideo(
-                          controller: plPlayerController.videoController!,
+                          // 必须带 key：SimpleVideoState 只在 initState 订阅
+                          // controller.player.stream.width/height，
+                          // didUpdateWidget 不会重新订阅，所以 controller 换了
+                          // 必须换 State，否则会一直挂在已 dispose 的旧 controller
+                          // 上（画面全黑）。渲染路径切换会整体替换 controller。
+                          key: ValueKey(videoController),
+                          controller: videoController,
                           fill: widget.fill,
                           aspectRatio: videoFit.aspectRatio,
                         ),
