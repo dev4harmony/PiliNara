@@ -17,7 +17,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # update when release
-version: 2.1.5+6869
+version: 2.1.5+6871
 
 environment:
   sdk: ">=3.12.2"
@@ -153,12 +153,12 @@ dependencies:
   media_kit_video:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./media_kit_video
   media_kit_libs_video:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./libs/universal/media_kit_libs_video
 
   # 媒体通知
@@ -367,27 +367,27 @@ dependency_overrides:
   media_kit:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./media_kit
   media_kit_libs_linux:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./libs/linux/media_kit_libs_linux
   media_kit_libs_ios_video:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./libs/ios/media_kit_libs_ios_video
   media_kit_libs_macos_video:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./libs/macos/media_kit_libs_macos_video
   media_kit_libs_ohos:
     git:
       url: https://github.com/HelloZeroNick/media-kit.git
-      ref: feat-secondary-subtitle
+      ref: support-pilinara
       path: ./libs/ohos/media_kit_libs_ohos
   # media_kit_libs_android_video:
   #   git:

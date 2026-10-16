@@ -1,8 +1,8 @@
-import 'package:PiliPlus/media_kit_adapt/simple_video.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/pip_transition_coordinator.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:get/get.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 /// 轻量小窗内容:视频纹理 + 弹幕(仅活跃态) + 缓冲指示。
 ///

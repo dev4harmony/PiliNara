@@ -1272,8 +1272,8 @@ packages:
     dependency: "direct main"
     description:
       path: media_kit
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.3"
@@ -1290,8 +1290,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "libs/ios/media_kit_libs_ios_video"
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1299,8 +1299,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "libs/linux/media_kit_libs_linux"
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.1"
@@ -1308,8 +1308,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "libs/macos/media_kit_libs_macos_video"
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1317,8 +1317,8 @@ packages:
     dependency: "direct overridden"
     description:
       path: "libs/ohos/media_kit_libs_ohos"
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.0"
@@ -1326,8 +1326,8 @@ packages:
     dependency: "direct main"
     description:
       path: "libs/universal/media_kit_libs_video"
-      ref: feat-secondary-subtitle
-      resolved-ref: b4fbe1ee6d994459ce84b34a649a89c40f5d9032
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.7"
@@ -1353,8 +1353,8 @@ packages:
     dependency: "direct main"
     description:
       path: media_kit_video
-      ref: feat-secondary-subtitle
-      resolved-ref: d669b8d14c1dc8eadd27bbf4bea0bc5d8f75a32c
+      ref: support-pilinara
+      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "2.0.1"

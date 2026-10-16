@@ -237,17 +237,23 @@ lib/utils/image_memory_cleaner.dart
 | `Player.current`（`Playlist` 别名） | 无此 getter | `player.state.playlist.medias`（`PlayerState.playlist` → `Playlist.medias`）×3，均在 `lib/plugin/pl_player/controller.dart` |
 | `Player.setSecondarySubtitleTrack(...)` ✅ | 本 fork `d1a8fb90` 已实现：`sub-add` 用 `auto` 标志（不动主字幕选择）、等 track-list 新条目（5s 超时回退扫描 `state.tracks`）后写 `secondary-sid`；track-list 处理解析 `selected` / `main-selection`（0=sid, 1=secondary-sid）推导 `state.track.secondarySubtitle` | 已恢复：`lib/pages/video/controller.dart` `setSecondarySubtitle` + `_setSecondarySubtitleTrack`（disposed 守卫 + try/catch，镜像 `_setSubtitleTrack`），`vttSecondarySubtitlesIndex` 随选择更新 |
 | `SubtitleViewConfiguration` 的 `strokeStyle` / `secondaryStyle` / `secondaryStrokeStyle` / `spacing` ✅ | 本 fork `d1a8fb90` 已补齐（`spacing` 默认 4.0；副字幕未显式给 `secondaryStyle` 时回落主 `strokeStyle` 描边） | 已恢复：`lib/plugin/pl_player/controller.dart` `getSubConfig` 回填 4 参数（保留 `textScaler: TextScaler.noScaling`）；`lib/plugin/pl_player/view/view.dart` SubtitleView 构造透传 4 字段（现版本由外部管理拖拽/padding，需逐字段重建 config） |
-| `PlayerStream.size`（`Stream<(int,int)>`）+ 非空 `state.width/height` | 只有 `Stream<int?> width` / `Stream<int?> height`，`state.width/height` 为 `int?` | vendored `lib/media_kit_adapt/simple_video.dart`（见下） |
+| `PlayerStream.size`（`Stream<(int,int)>`）+ 非空 `state.width/height` | 只有 `Stream<int?> width` / `Stream<int?> height`，`state.width/height` 为 `int?` | 本 fork `support-pilinara` 的 `media_kit_video` 自带 `SimpleVideo`（见下） |
 | `setShader(type, player)` 双参 | 第 2 参 `NativePlayer? pp` 是冗余的（`setShader` 内部会自己取 player） | 调用点去掉第 2 参：`unawaited(setShader(defaultSuperResolutionType))`（`lib/plugin/pl_player/controller.dart`） |
 
-- **`SimpleVideo`**：cnoim 里不存在该类，已把 Nara fork 的
-  `media_kit_video/lib/src/video/simple_video_texture.dart` vendored 到
-  **`lib/media_kit_adapt/simple_video.dart`**，仅两处适配：
-  `stream.size` 换成 `stream.width` + `stream.height` 两条订阅，
-  `_visible` 初始化用 `(_width ?? 0) > 0 && (_height ?? 0) > 0`（`int?` 判空）。
+- **`SimpleVideo`**：cnoim 里不存在该类。原先 vendored 到 `lib/media_kit_adapt/simple_video.dart`，
+  现已**回迁到 fork**：`support-pilinara` 分支新增
+  `media_kit_video/lib/src/video/simple_video_texture.dart`（由 `src/video/video.dart` 导出），
+  工作区不再保留副本，导入点直接 `package:media_kit_video/media_kit_video.dart`（2 处：
+  `lib/plugin/pl_player/view/view.dart`、`lib/common/widgets/pip_mini_video_content.dart`）。
+  相对 upstream/main 的差异只有两点：`stream.size` 换成 `stream.width` + `stream.height`
+  两条订阅（`_visible` 用 `(_width ?? 0) > 0 && (_height ?? 0) > 0` 判空）；
+  平台视图路径——`OhosVideoController.usePlatformView` 为真时挂 `OhosPlatformVideo`，
+  否则画 `Texture`（HDR 输出没有纹理 ID，只画纹理会全黑）。
   其余语义（宽高未就绪不渲染、`rect.notifyListeners()` 强制重建、尺寸除以 `devicePixelRatio`）
-  保持原样。导入点 2 处：`lib/plugin/pl_player/view/view.dart`、`lib/common/widgets/pip_mini_video_content.dart`
-  （均插在 `package:PiliPlus/...` 字母序 `common < media_kit_adapt < models` 位置，满足 `always_use_package_imports`）。
+  保持原样。
+- `support-pilinara` 同时 **revert 了 `d669b8d1`**：`SimpleVideo` 进库后，
+  `media_kit_video.dart` 不再需要导出 `OhosVideoController` / `OhosPlatformVideo`，
+  两者退回 `lib/src` 的实现细节。
 - 若将来改用 fork 自带的 `Video`：必须配 `controls: NoVideoControls` 才等价；
   `SubtitleViewConfiguration` 已支持副字幕双行渲染（`d1a8fb90`），`rect` 是否除以 dpr 的尺寸语义仍需复核。
 - TODO：`Starfallan/media-kit#native` 的副字幕已移植完成（本 fork `feat-secondary-subtitle`）；
@@ -579,7 +585,7 @@ flutter build hap --release --dart-define-from-file=.vscode/env.json
       两处画中画按钮按 §6.8 改 `StreamBuilder`；副字幕按 §6.1 注释关闭。
     - *media_kit 适配桶*：全部见 §6.1 的表格（`PlayerExtension.setProperty`、
       `player.state.playlist.medias` ×3、`SubtitleViewConfiguration` 裁参、
-      vendored `lib/media_kit_adapt/simple_video.dart`、`setShader` 去掉第 2 参、
+      `SimpleVideo` 回迁到 `support-pilinara` 分支的 `media_kit_video`、`setShader` 去掉第 2 参、
       补 `import 'package:PiliPlus/pages/setting/models/play_settings.dart' show kMaxVolume;`）。
 12. 补 `flutter_math_fork` 的鸿蒙 `dependency_override`（§6.7）—— 它只在 Nara 的依赖链上，
     必须等真实编译才暴露，analyze 不报。

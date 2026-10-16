@@ -39,7 +39,8 @@ HarmonyOS branch, without losing the HarmonyOS platform layer.**
     (AGENT.md §6.8)
   - media_kit adaptation facts (AGENT.md §6.1): `PlayerExtension.setProperty`,
     `player.state.playlist.medias`, `SubtitleViewConfiguration` 4-arg form,
-    vendored `lib/media_kit_adapt/simple_video.dart`, `setShader` 1-arg
+    `SimpleVideo` from the `support-pilinara` branch of `media_kit_video`
+    (no longer vendored in `lib/media_kit_adapt/`), `setShader` 1-arg
   - `lib/utils/android/bindings.g.dart` stays the 34-line no-jni stub
   - environment/dep pins: `sdk >=3.12.2`, `flutter >=3.44.9`, `.fvmrc 3.44.9`,
     gitcode ohos forks, `flutter_math_fork` override
