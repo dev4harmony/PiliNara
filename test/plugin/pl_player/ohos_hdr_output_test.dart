@@ -10,6 +10,7 @@ void main() {
   ];
 
   // 默认：面板支持 HDR Vivid，HDR 片源，开着「匹配视频亮度」
+  // pipMode 只表示**系统画中画**，见 OhosHdrOutput.output 的说明。
   OhosOutput output({
     VideoQuality? quality = VideoQuality.hdr,
     bool hdrEnabled = true,
@@ -62,10 +63,25 @@ void main() {
       expect(output(displayHasNoHdr: true), textureOutput);
     });
 
-    test('falls back to the texture path in picture-in-picture', () {
-      // PiP 是另一块 XComponent，平台视图跟不过去
+    test('falls back to SDR for the SYSTEM picture-in-picture window', () {
+      // 系统小窗由 floating 插件另起一块 XComponent 承载整个 Flutter 界面，
+      // 平台视图跟不过去，留在平台视图上小窗里只有空白，只能退回纹理路径
       expect(output(pipMode: true), textureOutput);
       expect(output(pipMode: true, maySupportVivid: false), textureOutput);
+    });
+
+    test('keeps HDR for the IN-APP floating window', () {
+      // 应用内小窗在应用自己的 Overlay 里，仍在同一个 Flutter 视图内，平台视图
+      // 照常合成，所以它拿到的必须是 HDR 输出，而不是纹理路径。
+      expect(
+        output(
+          pipMode: OhosHdrOutput.needsSdrOutput(
+            nativePiP: false,
+            inAppPiP: true,
+          ),
+        ),
+        hdrOutput,
+      );
     });
 
     test('sticks to static HDR10 signalling on panels without HDR Vivid', () {
@@ -119,6 +135,64 @@ void main() {
         isFalse,
       );
       expect(OhosHdrOutput.measuresPeak(null), isFalse);
+    });
+
+    test('measures the peak in the in-app floating window', () {
+      // 应用内小窗仍走平台视图，所以「匹配视频亮度」关着时照旧测量峰值
+      expect(
+        OhosHdrOutput.measuresPeak(
+          output(
+            matchVideo: false,
+            pipMode: OhosHdrOutput.needsSdrOutput(
+              nativePiP: false,
+              inAppPiP: true,
+            ),
+          ),
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('OhosHdrOutput.needsSdrOutput', () {
+    test('only the SYSTEM window forces SDR', () {
+      // 规则本身：系统小窗另起一块 XComponent，平台视图跟不过去，必须降级；
+      // 应用内小窗在同一块 Flutter 视图内，照旧 HDR。
+      expect(
+        OhosHdrOutput.needsSdrOutput(nativePiP: false, inAppPiP: false),
+        isFalse,
+      );
+      expect(
+        OhosHdrOutput.needsSdrOutput(nativePiP: true, inAppPiP: false),
+        isTrue,
+      );
+      expect(
+        OhosHdrOutput.needsSdrOutput(nativePiP: false, inAppPiP: true),
+        isFalse,
+      );
+    });
+
+    test('prefers SDR when both are somehow active at once', () {
+      // 两者同时为真时画面确实已经不在应用的 Flutter 视图里，按系统小窗处理
+      expect(
+        OhosHdrOutput.needsSdrOutput(nativePiP: true, inAppPiP: true),
+        isTrue,
+      );
+    });
+
+    test('applies to the output the app really builds', () {
+      // 把规则接到 output 上，锁住「应用内小窗 -> HDR，系统小窗 -> SDR」这条端到端
+      // 结论：改坏 needsSdrOutput 或 output 的 pipMode 用法，这里都会红。
+      OhosOutput rendered({required bool nativePiP, required bool inAppPiP}) =>
+          output(
+            pipMode: OhosHdrOutput.needsSdrOutput(
+              nativePiP: nativePiP,
+              inAppPiP: inAppPiP,
+            ),
+          );
+
+      expect(rendered(nativePiP: false, inAppPiP: true), hdrOutput);
+      expect(rendered(nativePiP: true, inAppPiP: false), textureOutput);
     });
   });
 }

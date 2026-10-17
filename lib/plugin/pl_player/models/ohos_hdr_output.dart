@@ -10,8 +10,8 @@ typedef OhosOutput = ({bool platformView, String hdrMode, double? targetPeak});
 
 /// 鸿蒙上的视频输出规则。
 ///
-/// 只有平台视图能把 HDR 交给系统合成。纹理路径（SDR 片源、画中画）上 Flutter
-/// 会把视频当 sRGB 采样，所以那里必须让 mpv 自己色调映射到 SDR，与
+/// 只有平台视图能把 HDR 交给系统合成。纹理路径（SDR 片源、系统画中画）上
+/// Flutter 会把视频当 sRGB 采样，所以那里必须让 mpv 自己色调映射到 SDR，与
 /// media-kit 762fdc63 的做法一致；否则 PQ 画面会直接泛白。
 abstract final class OhosHdrOutput {
   /// 按设置、片源与面板能力决定 [OhosOutput]。
@@ -22,8 +22,16 @@ abstract final class OhosHdrOutput {
   /// 由 mpv 读码流决定，所以几档 HDR 的输出完全一样，彼此切换不必重建播放器。
   ///
   /// **platformView**：HDR 片源走平台视图，与全屏状态无关，进出全屏不必重建
-  /// 播放器。画中画除外：PiP 是另一块 XComponent，平台视图跟不过去，留在平台
-  /// 视图上 PiP 窗口里是一片空白；退回纹理路径至少画面还在，只是没有 HDR。
+  /// 播放器。
+  ///
+  /// 只有**系统画中画**（[pipMode]，鸿蒙由 floating 插件另起一块 XComponent 承载
+  /// 整个 Flutter 界面）必须退回纹理路径：平台视图活在应用自己的 Flutter 视图
+  /// 里，跟不到系统小窗的那块 XComponent 上，留在平台视图上小窗里就是一片空白。
+  ///
+  /// **应用内小窗不算**：它是应用自己 Overlay 里的一层，仍在同一个 Flutter 视图
+  /// 内，平台视图照常合成，所以那里照旧允许 HDR（见 media-kit 的
+  /// `PlatformView.SurfaceChanged`：XComponent 重建时会把 mpv 重新指到新表面）。
+  /// 早先的实现把应用内小窗一并排除，正好与这里相反。
   ///
   /// **hdrMode**：上报哪种 HDR 类型由 mpv 按**码流**决定，不看画质档位：
   /// - HDR10：静态元数据（SEI 137/144）；
@@ -44,6 +52,8 @@ abstract final class OhosHdrOutput {
   /// 的内容压进这个范围而不是被屏幕截断，mpv 上报的元数据描述映射之后的画面；
   /// 更暗的片源原样输出，不会被拉伸到 [peakNits]（libplacebo 只压缩、不扩展），
   /// 上报的也是片源自己的元数据，与开启时一样。
+  ///
+  /// [pipMode] 只表示**系统画中画**，见上面对 platformView 的说明。
   static OhosOutput output({
     required bool hdrEnabled,
     required VideoQuality? quality,
@@ -66,6 +76,22 @@ abstract final class OhosHdrOutput {
       targetPeak: platformView && !matchVideo ? peakNits.toDouble() : null,
     );
   }
+
+  /// 当前画中画状态是否要求退回 SDR（即是否为**系统**画中画）。
+  ///
+  /// 这是 [output] 的 `pipMode` 参数的唯一来源，单独提出来是为了让「哪种画中画
+  /// 才降级」这条规则可测、且只有一处可改：
+  /// - [nativePiP]=true（系统小窗，floating 插件另起 XComponent 承载整个 Flutter
+  ///   界面）-> true，退回 SDR；
+  /// - [inAppPiP]=true（应用内小窗，应用自己 Overlay 里的一层，仍在同一个
+  ///   Flutter 视图内）-> false，继续走 HDR 平台视图。
+  ///
+  /// 两者同时为真时按系统画中画处理：那时画面确实已经不在应用的 Flutter 视图
+  /// 里了，应用内那层小窗也不再上屏。
+  static bool needsSdrOutput({
+    required bool nativePiP,
+    required bool inAppPiP,
+  }) => nativePiP;
 
   /// 是否让 mpv 在 GPU 上逐帧测量片源的实际峰值（`--hdr-compute-peak`）。
   ///

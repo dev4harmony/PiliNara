@@ -1273,7 +1273,7 @@ packages:
     description:
       path: media_kit
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.3"
@@ -1291,7 +1291,7 @@ packages:
     description:
       path: "libs/ios/media_kit_libs_ios_video"
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1300,7 +1300,7 @@ packages:
     description:
       path: "libs/linux/media_kit_libs_linux"
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.1"
@@ -1309,7 +1309,7 @@ packages:
     description:
       path: "libs/macos/media_kit_libs_macos_video"
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1318,7 +1318,7 @@ packages:
     description:
       path: "libs/ohos/media_kit_libs_ohos"
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.0"
@@ -1327,7 +1327,7 @@ packages:
     description:
       path: "libs/universal/media_kit_libs_video"
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.7"
@@ -1354,7 +1354,7 @@ packages:
     description:
       path: media_kit_video
       ref: support-pilinara
-      resolved-ref: "6a1901644353b214030cd58032cc3abc4da83bbd"
+      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "2.0.1"

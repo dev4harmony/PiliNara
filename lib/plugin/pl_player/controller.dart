@@ -587,14 +587,27 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   ///
   /// 平台视图没有单独的开关：关掉它等于关掉 HDR（元数据会在 Flutter 纹理那一步
   /// 丢光），所以它不是一个用户能做的取舍，跟随「启用 HDR 视频」即可。
-  /// 应用内小窗同理要排除，见 [notifyInAppPipChanged]。
+  ///
+  /// 只有**系统画中画**要退回 SDR，规则见 [OhosHdrOutput.needsSdrOutput]：
+  /// [isNativePip] 由 floating 插件的 `onPipModeChanged` 经 `syncNativePip` 同步，
+  /// 那时小窗由插件另起一块 XComponent 承载整个 Flutter 界面，平台视图跟不过去，
+  /// 留在平台视图上小窗里只有空白。
+  ///
+  /// **应用内小窗不在此列**：它在应用自己的 Overlay 里，仍在同一个 Flutter 视图
+  /// 内，平台视图照常合成，所以那里继续走 HDR；进出应用内小窗也不再重建播放器
+  /// （[notifyInAppPipChanged] 因此变成空转，输出根本没变）。
+  /// 不要用 [isPipMode] 或 [_isInInAppPip] 去驱动这条规则：前者含应用内小窗以外
+  /// 的多种情况，后者恰好把该保留 HDR 的应用内小窗当成要降级的那一种。
   OhosOutput? get _ohosOutput => OS.isHarmony
       ? OhosHdrOutput.output(
           hdrEnabled: enableHDR,
           quality: _hdrQuality,
           displayHasNoHdr: HarmonyChannel.displayHasNoHdr,
           displayMaySupportVivid: HarmonyChannel.displayMaySupportHdrVivid,
-          pipMode: isPipMode && _isInInAppPip,
+          pipMode: OhosHdrOutput.needsSdrOutput(
+            nativePiP: isNativePip.value,
+            inAppPiP: _isInInAppPip,
+          ),
           peakNits: Pref.hdrPeakNits,
           matchVideo: Pref.hdrMatchVideoPeak,
         )
@@ -1628,9 +1641,10 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
       Floating().onPipModeChanged = (v) {
         syncNativePip(v);
-        // 画中画是另一块 XComponent，平台视图不会跟过去（PiP 窗口里一片空白），
-        // 回到应用时也要切回来。渲染路径在 VideoController 创建时固定，
-        // 只能重建播放器。
+        // 系统画中画是另一块 XComponent，平台视图不会跟过去（小窗里一片
+        // 空白），要退回 SDR 纹理路径，回到应用时再切回来。渲染路径在
+        // VideoController 创建时固定，只能重建播放器。
+        // 应用内小窗不在这里：它不改变输出，也不必重建，见 [_ohosOutput]。
         unawaited(_playerQueue.requestRebuild());
       };
       syncNativePip(Floating().isPipMode);
@@ -2669,13 +2683,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 应用内小窗进出时由 [PipOverlayService] / [LivePipOverlayService] 调用，
   /// 语义对齐系统画中画的 `onPipModeChanged`（见 [_startListeners]）。
   ///
-  /// 应用内小窗里的画面走的是 `PipMiniVideoContent` 挂的 SimpleVideo，它
-  /// 只画纹理：平台视图的 XComponent 不会跟着搬进浮层，留在平台视图路径上
-  /// 小窗里就是空白/错位。而渲染路径在 VideoController 创建时就固定了，只能
-  /// 重建播放器。
+  /// 应用内小窗**不影响**输出（见 [_ohosOutput]）：它是应用自己 Overlay 里的一
+  /// 层，仍在同一个 Flutter 视图内，平台视图照常合成，画面与小窗外的播放走同一
+  /// 条 HDR 平台视图路径。所以这里实际上是个空操作——[PlayerRebuildQueue] 到队头
+  /// 发现 isStale 为假，直接返回，不会重建播放器，进出小窗也就不再打断播放。
   ///
-  /// 是否真要重建由 [PlayerRebuildQueue] 到队头按 isStale 判断：若期间已经
-  /// setDataSource 过（那时 usePlatformView 已含小窗状态），这里就是空操作。
+  /// 留着这个入口是为了让两个小窗服务的语义与系统画中画对齐；真需要重建的只有
+  /// 系统画中画（走 `onPipModeChanged` -> `syncNativePip`）。
   void notifyInAppPipChanged() => unawaited(_syncRenderPath());
 
   /// 按当前渲染路径重建播放器，保留进度、播放状态与倍速。

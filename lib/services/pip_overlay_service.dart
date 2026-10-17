@@ -275,8 +275,9 @@ class PipOverlayService {
     }
 
     isInPipMode = true;
-    // 小窗走纹理（见 PipMiniVideoContent），HDR 的平台视图不能跟过来：
-    // 渲染路径在 VideoController 创建时固定，只能重建播放器。
+    // 应用内小窗不影响 HDR 输出：它仍在同一个 Flutter 视图内，平台视图照常
+    // 合成。这里只是跟系统画中画的 onPipModeChanged 对齐语义，实际不会重建
+    // 播放器（isStale 为假）。
     plPlayerController.notifyInAppPipChanged();
     // 收起动画:从页面播放器矩形缩至小窗;sourceRect 为空(量取失败的
     // 兜底路径)时直接以活跃态出现
@@ -380,9 +381,7 @@ class PipOverlayService {
 
     final closeCallback = callOnClose ? _onCloseCallback : null;
     final playerController = _savedPlayerController;
-    // 退出小窗回到页面：渲染路径要切回平台视图（HDR）。是否真要重建由队列
-    // 按 isStale 判断；若随后马上 dispose，_rebuildForRenderPath 会在
-    // _playerCount == 0 处提前返回，不会多出一个孤儿播放器。
+    // 退出小窗回到页面：输出没变过，这里同样是空操作，播放不被打断。
     playerController?.notifyInAppPipChanged();
     // 静态引用即将被清空，释放 owner 所需的引用必须在此捕获
     final ownerToRelease = releaseSavedOwner ? _savedController : null;
