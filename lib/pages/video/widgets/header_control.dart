@@ -9,6 +9,7 @@ import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/common/widgets/dialog/report.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
 import 'package:PiliPlus/common/widgets/marquee.dart';
+import 'package:PiliPlus/common/widgets/player_bar.dart';
 import 'package:PiliPlus/http/danmaku.dart';
 import 'package:PiliPlus/http/danmaku_block.dart';
 import 'package:PiliPlus/http/init.dart';
@@ -43,10 +44,12 @@ import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService, ShutdownPanel;
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
+import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
@@ -336,6 +339,7 @@ class HeaderControl extends StatefulWidget {
     if (Accounts.main.isLogin) {
       return autoWrapReportDialog(
         context,
+        mid: () => int.parse(extra.mid),
         ReportOptions.danmakuReport,
         withContent: ReportOptions.danmakuReportCheck,
         contentRequired: ReportOptions.danmakuReportCheck,
@@ -370,7 +374,6 @@ class HeaderControl extends StatefulWidget {
     if (Accounts.main.isLogin) {
       return autoWrapReportDialog(
         context,
-        ban: false,
         ReportOptions.liveDanmakuReport,
         withContent: ReportOptions.liveDanmakuReportCheck,
         contentRequired: ReportOptions.liveDanmakuReportCheck,
@@ -520,12 +523,13 @@ class HeaderControlState extends State<HeaderControl>
                       ? ShutdownPanel(
                           buildCountdownText: (text) =>
                               Text(text == null ? '已结束' : '剩余 $text'),
-                          builder: (
-                            context,
-                            countdown,
-                            onCountdown,
-                            setState,
-                          ) => countdown,
+                          builder:
+                              (
+                                context,
+                                countdown,
+                                onCountdown,
+                                setState,
+                              ) => countdown,
                         )
                       : null,
                 ),
@@ -690,7 +694,8 @@ class HeaderControlState extends State<HeaderControl>
                                 plPlayerController.onlyPlayAudio.value =
                                     !onlyPlayAudio;
                                 plPlayerController.markManualOnlyPlayAudio(
-                                    !onlyPlayAudio);
+                                  !onlyPlayAudio,
+                                );
                                 final player =
                                     plPlayerController.videoPlayerController!;
                                 if (onlyPlayAudio &&
@@ -1600,8 +1605,7 @@ class HeaderControlState extends State<HeaderControl>
                     onChanged: updateFontScale,
                   ),
                   ...sliderRow(
-                    title:
-                        '全屏字体大小 ${(fontScaleFS * 100).toStringAsFixed(1)}%',
+                    title: '全屏字体大小 ${(fontScaleFS * 100).toStringAsFixed(1)}%',
                     reset: isPrimary
                         ? resetBtn(
                             theme,
@@ -1683,8 +1687,7 @@ class HeaderControlState extends State<HeaderControl>
                       onChanged: updateSecondarySpacing,
                     ),
                   ...sliderRow(
-                    title:
-                        '背景不透明度 ${(bgOpacity * 100).toStringAsFixed(1)}%',
+                    title: '背景不透明度 ${(bgOpacity * 100).toStringAsFixed(1)}%',
                     reset: resetBtn(theme, '67%', () => updateOpacity(0.67)),
                     min: 0,
                     max: 1,
@@ -1839,6 +1842,10 @@ class HeaderControlState extends State<HeaderControl>
 
   late final isFileSource = videoDetailCtr.isFileSource;
 
+  static const btnWidth = 42.0;
+  static const btnHeight = 34.0;
+  static const btnStyle = ButtonStyle(padding: WidgetStatePropertyAll(.zero));
+
   @override
   Widget build(BuildContext context) {
     final isFullScreen = this.isFullScreen;
@@ -1846,404 +1853,404 @@ class HeaderControlState extends State<HeaderControl>
     final showFSActionItem =
         !isFileSource && plPlayerController.showFSActionItem && isFSOrPip;
     showCurrTimeIfNeeded(isFullScreen);
-    Widget title;
+
+    Widget? title;
     if (introController.videoDetail.value.title != null &&
         (isFullScreen ||
             ((!horizontalScreen || plPlayerController.isDesktopPip) &&
                 !isPortrait))) {
-      title = Expanded(
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Padding(
-              key: titleKey,
-              padding: isPortrait
-                  ? EdgeInsets.zero
-                  : const EdgeInsets.only(right: 10),
-              child: Obx(
-                () {
-                  final videoDetail = introController.videoDetail.value;
-                  final String title;
-                  if (isFileSource || videoDetail.videos == 1) {
-                    title = videoDetail.title!;
-                  } else {
-                    title =
-                        videoDetail.pages
-                            ?.firstWhereOrNull(
-                              (e) => e.cid == videoDetailCtr.cid.value,
-                            )
-                            ?.part ??
-                        videoDetail.title!;
-                  }
-                  return MarqueeText(
-                    title,
-                    spacing: 30,
-                    velocity: 30,
-                    strutStyle: const StrutStyle(fontSize: 16, leading: 0),
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    provider: effectiveProvider,
+      title = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Padding(
+            key: titleKey,
+            padding: isPortrait
+                ? EdgeInsets.zero
+                : const EdgeInsets.only(right: 10),
+            child: Obx(
+              () {
+                final videoDetail = introController.videoDetail.value;
+                final String title;
+                if (isFileSource || videoDetail.videos == 1) {
+                  title = videoDetail.title!;
+                } else {
+                  title =
+                      videoDetail.pages
+                          ?.firstWhereOrNull(
+                            (e) => e.cid == videoDetailCtr.cid.value,
+                          )
+                          ?.part ??
+                      videoDetail.title!;
+                }
+                return MarqueeText(
+                  title,
+                  spacing: 30,
+                  velocity: 30,
+                  strutStyle: const StrutStyle(fontSize: 16, leading: 0),
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  provider: effectiveProvider,
+                );
+              },
+            ),
+          ),
+          if (introController.isShowOnlineTotal ||
+              introController.isShowDmCount)
+            Positioned(
+              left: 0,
+              bottom: 0,
+              child: FractionalTranslation(
+                translation: const Offset(0, 1),
+                child: Obx(() {
+                  final parts = <String>[
+                    if (introController.isShowOnlineTotal)
+                      '${introController.total.value}人正在看',
+                    if (introController.isShowDmCount &&
+                        videoDetailCtr.dmCount.value != null)
+                      '${videoDetailCtr.dmCount.value}条弹幕',
+                  ];
+                  return Text(
+                    parts.join('  '),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                    ),
                   );
-                },
+                }),
               ),
             ),
-            if (introController.isShowOnlineTotal || introController.isShowDmCount)
-              Positioned(
-                left: 0,
-                bottom: 0,
-                child: FractionalTranslation(
-                  translation: const Offset(0, 1),
-                  child: Obx(() {
-                    final parts = <String>[
-                      if (introController.isShowOnlineTotal)
-                        '${introController.total.value}人正在看',
-                      if (introController.isShowDmCount &&
-                          videoDetailCtr.dmCount.value != null)
-                        '${videoDetailCtr.dmCount.value}条弹幕',
-                    ];
-                    return Text(
-                      parts.join('  '),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                      ),
-                    );
-                  }),
-                ),
-              ),
-          ],
-        ),
+        ],
       );
-    } else {
-      title = const Spacer();
     }
 
-    const btnWidth = 40.0;
-    const btnHeight = 34.0;
-    const btnStyle = ButtonStyle(padding: WidgetStatePropertyAll(.zero));
-
-    return AppBar(
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      backgroundColor: Colors.transparent,
-      foregroundColor: Colors.white,
-      primary: false,
-      automaticallyImplyLeading: false,
-      toolbarHeight: showFSActionItem ? 112 : null,
-      flexibleSpace: Column(
-        mainAxisSize: MainAxisSize.min,
+    return Padding(
+      padding: const .symmetric(vertical: 12),
+      child: Column(
+        mainAxisSize: .min,
         children: [
-          const SizedBox(height: 11),
-          Row(
-            children: [
-              SizedBox(
-                width: btnWidth,
-                height: btnHeight,
-                child: IconButton(
-                  tooltip: '返回',
-                  style: btnStyle,
-                  icon: const Icon(
-                    FontAwesomeIcons.arrowLeft,
-                    size: 15,
-                    color: Colors.white,
-                  ),
-                  onPressed: () =>
-                      plPlayerController.onPopInvokedWithResult(false, null),
-                ),
-              ),
-              if (!plPlayerController.isDesktopPip &&
-                  (!isFullScreen || !isPortrait))
+          PlayerBar(
+            left: Row(
+              mainAxisSize: .min,
+              children: [
                 SizedBox(
                   width: btnWidth,
                   height: btnHeight,
                   child: IconButton(
-                    tooltip: '返回主页',
+                    tooltip: '返回',
                     style: btnStyle,
                     icon: const Icon(
-                      FontAwesomeIcons.house,
+                      FontAwesomeIcons.arrowLeft,
                       size: 15,
                       color: Colors.white,
                     ),
-                    onPressed: plPlayerController.onCloseAll,
+                    onPressed: () =>
+                        plPlayerController.onPopInvokedWithResult(false, null),
                   ),
                 ),
-              title,
-              // show current datetime
-              ...?timeBatteryWidgets,
-              if (PlatformUtils.isDesktop && !plPlayerController.isDesktopPip)
-                Obx(() {
-                  final isAlwaysOnTop = plPlayerController.isAlwaysOnTop.value;
-                  return SizedBox(
+                if (!plPlayerController.isDesktopPip &&
+                    (!isFullScreen || !isPortrait))
+                  SizedBox(
                     width: btnWidth,
                     height: btnHeight,
                     child: IconButton(
+                      tooltip: '返回主页',
                       style: btnStyle,
-                      tooltip: '${isAlwaysOnTop ? '取消' : ''}置顶',
-                      onPressed: () =>
-                          plPlayerController.setAlwaysOnTop(!isAlwaysOnTop),
-                      icon: isAlwaysOnTop
-                          ? const Icon(
-                              size: 19,
-                              Icons.push_pin,
-                              color: Colors.white,
-                            )
-                          : const Icon(
-                              size: 19,
-                              Icons.push_pin_outlined,
-                              color: Colors.white,
-                            ),
+                      icon: const Icon(
+                        FontAwesomeIcons.house,
+                        size: 15,
+                        color: Colors.white,
+                      ),
+                      onPressed: plPlayerController.onCloseAll,
                     ),
-                  );
-                }),
-              if (!isFileSource) ...[
-                if (!isFSOrPip) ...[
-                  if (videoDetailCtr.isUgc)
+                  ),
+              ],
+            ),
+            right: Row(
+              mainAxisSize: .min,
+              children: [
+                // show current datetime
+                ...?timeBatteryWidgets,
+                if (PlatformUtils.isDesktop && !plPlayerController.isDesktopPip)
+                  Obx(() {
+                    final isAlwaysOnTop =
+                        plPlayerController.isAlwaysOnTop.value;
+                    return SizedBox(
+                      width: btnWidth,
+                      height: btnHeight,
+                      child: IconButton(
+                        style: btnStyle,
+                        tooltip: '${isAlwaysOnTop ? '取消' : ''}置顶',
+                        onPressed: () =>
+                            plPlayerController.setAlwaysOnTop(!isAlwaysOnTop),
+                        icon: isAlwaysOnTop
+                            ? const Icon(
+                                size: 19,
+                                Icons.push_pin,
+                                color: Colors.white,
+                              )
+                            : const Icon(
+                                size: 19,
+                                Icons.push_pin_outlined,
+                                color: Colors.white,
+                              ),
+                      ),
+                    );
+                  }),
+                if (!isFileSource) ...[
+                  if (!isFSOrPip) ...[
+                    if (videoDetailCtr.isUgc)
+                      SizedBox(
+                        width: btnWidth,
+                        height: btnHeight,
+                        child: IconButton(
+                          tooltip: '听音频',
+                          style: btnStyle,
+                          onPressed: videoDetailCtr.toAudioPage,
+                          icon: const Icon(
+                            Icons.headphones_outlined,
+                            size: 19,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
                     SizedBox(
                       width: btnWidth,
                       height: btnHeight,
                       child: IconButton(
-                        tooltip: '听音频',
+                        tooltip: '投屏',
                         style: btnStyle,
-                        onPressed: videoDetailCtr.toAudioPage,
+                        onPressed: videoDetailCtr.onCast,
                         icon: const Icon(
-                          Icons.headphones_outlined,
+                          Icons.cast,
                           size: 19,
                           color: Colors.white,
                         ),
                       ),
                     ),
+                  ],
+                  if (kDebugMode || plPlayerController.enableSponsorBlock)
+                    SizedBox(
+                      width: btnWidth,
+                      height: btnHeight,
+                      child: IconButton(
+                        tooltip: '提交片段',
+                        style: btnStyle,
+                        onPressed: () => videoDetailCtr.onBlock(context),
+                        icon: const Icon(
+                          CustomIcons.shield_play_arrow,
+                          size: 20,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                ],
+                if (plPlayerController.enableBlock)
+                  Obx(
+                    () => videoDetailCtr.segmentProgressList.isNotEmpty
+                        ? SizedBox(
+                            width: btnWidth,
+                            height: btnHeight,
+                            child: IconButton(
+                              tooltip: '片段信息',
+                              style: btnStyle,
+                              onPressed: videoDetailCtr.showSBDetail,
+                              icon: const Icon(
+                                MdiIcons.advertisements,
+                                size: 19,
+                                color: Colors.white,
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                if (!isPortrait || isFullScreen || PlatformUtils.isDesktop) ...[
                   SizedBox(
                     width: btnWidth,
                     height: btnHeight,
                     child: IconButton(
-                      tooltip: '投屏',
+                      tooltip: '发弹幕',
                       style: btnStyle,
-                      onPressed: videoDetailCtr.onCast,
+                      onPressed: videoDetailCtr.showShootDanmakuSheet,
                       icon: const Icon(
-                        Icons.cast,
+                        Icons.comment_outlined,
                         size: 19,
                         color: Colors.white,
                       ),
                     ),
                   ),
+                  SizedBox(
+                    width: btnWidth,
+                    height: btnHeight,
+                    child: Obx(
+                      () {
+                        final enableShowDanmaku =
+                            plPlayerController.enableShowDanmaku.value;
+                        return IconButton(
+                          tooltip: "${enableShowDanmaku ? '关闭' : '开启'}弹幕",
+                          style: btnStyle,
+                          onPressed: () {
+                            final newVal = !enableShowDanmaku;
+                            plPlayerController.enableShowDanmaku.value = newVal;
+                            if (!plPlayerController.tempPlayerConf) {
+                              setting.put(
+                                SettingBoxKey.enableShowDanmaku,
+                                newVal,
+                              );
+                            }
+                          },
+                          icon: enableShowDanmaku
+                              ? const Icon(
+                                  size: 20,
+                                  CustomIcons.dm_on,
+                                  color: Colors.white,
+                                )
+                              : const Icon(
+                                  size: 20,
+                                  CustomIcons.dm_off,
+                                  color: Colors.white,
+                                ),
+                        );
+                      },
+                    ),
+                  ),
                 ],
-                if (kDebugMode || plPlayerController.enableSponsorBlock)
+                SizedBox(
+                  width: btnWidth,
+                  height: btnHeight,
+                  child: IconButton(
+                    tooltip: '弹幕设置',
+                    style: btnStyle,
+                    onPressed: showSetDanmaku,
+                    icon: const Icon(
+                      size: 20,
+                      CustomIcons.dm_settings,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                if ((Platform.isAndroid && PiliAndroidHelper.isPipAvailable) ||
+                    OS.isHarmony ||
+                    (Platform.isIOS && IOSPipHelper.isAvailable) ||
+                    (PlatformUtils.isDesktop && !isFullScreen))
                   SizedBox(
                     width: btnWidth,
                     height: btnHeight,
                     child: IconButton(
-                      tooltip: '提交片段',
+                      tooltip: '画中画',
                       style: btnStyle,
-                      onPressed: () => videoDetailCtr.onBlock(context),
+                      onPressed: () async {
+                        if (PlatformUtils.isDesktop) {
+                          plPlayerController.toggleDesktopPip();
+                          return;
+                        }
+                        if (await Floating().isPipAvailable) {
+                          if (context.mounted &&
+                              !videoPlayerServiceHandler!
+                                  .enableBackgroundPlay) {
+                            final theme = Theme.of(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Column(
+                                  children: [
+                                    const Row(
+                                      children: [
+                                        Icon(
+                                          Icons.check,
+                                          color: Colors.green,
+                                        ),
+                                        SizedBox(width: 10),
+                                        Text(
+                                          '画中画',
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            height: 1.5,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    const Text(
+                                      '建议开启【后台音频服务】\n'
+                                      '避免画中画没有暂停按钮',
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        height: 1.5,
+                                      ),
+                                    ),
+                                    Row(
+                                      children: [
+                                        TextButton(
+                                          style: ButtonStyle(
+                                            foregroundColor:
+                                                WidgetStatePropertyAll(
+                                                  theme
+                                                      .snackBarTheme
+                                                      .actionTextColor,
+                                                ),
+                                          ),
+                                          onPressed: () {
+                                            plPlayerController
+                                                .setBackgroundPlay(true);
+                                            SmartDialog.showToast(
+                                              "请重新载入本页面刷新",
+                                            );
+                                          },
+                                          child: const Text('启用后台音频服务'),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        TextButton(
+                                          style: ButtonStyle(
+                                            foregroundColor:
+                                                WidgetStatePropertyAll(
+                                                  theme
+                                                      .snackBarTheme
+                                                      .actionTextColor,
+                                                ),
+                                          ),
+                                          onPressed: () {},
+                                          child: const Text('不启用'),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                duration: const Duration(seconds: 2),
+                                showCloseIcon: true,
+                              ),
+                            );
+                            await Future.delayed(const Duration(seconds: 3));
+                          }
+                          if (!context.mounted) return;
+                          final status = await plPlayerController.enterPip();
+                          if (OS.isHarmony && status == PiPStatus.unavailable) {
+                            // 系统小窗（自由窗口）内画中画无法启动，插件会拒绝
+                            SmartDialog.showToast('当前处于系统小窗，无法进入画中画');
+                          }
+                        }
+                      },
                       icon: const Icon(
-                        CustomIcons.shield_play_arrow,
-                        size: 20,
+                        Icons.picture_in_picture_outlined,
+                        size: 19,
                         color: Colors.white,
                       ),
                     ),
                   ),
-              ],
-              Obx(
-                () => videoDetailCtr.segmentProgressList.isNotEmpty
-                    ? SizedBox(
-                        width: btnWidth,
-                        height: btnHeight,
-                        child: IconButton(
-                          tooltip: '片段信息',
-                          style: btnStyle,
-                          onPressed: videoDetailCtr.showSBDetail,
-                          icon: const Icon(
-                            MdiIcons.advertisements,
-                            size: 19,
-                            color: Colors.white,
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              if (!isPortrait || isFullScreen || PlatformUtils.isDesktop) ...[
                 SizedBox(
                   width: btnWidth,
                   height: btnHeight,
                   child: IconButton(
-                    tooltip: '发弹幕',
+                    tooltip: "更多设置",
                     style: btnStyle,
-                    onPressed: videoDetailCtr.showShootDanmakuSheet,
+                    onPressed: showSettingSheet,
                     icon: const Icon(
-                      Icons.comment_outlined,
+                      Icons.more_vert_outlined,
                       size: 19,
                       color: Colors.white,
                     ),
                   ),
                 ),
-                SizedBox(
-                  width: btnWidth,
-                  height: btnHeight,
-                  child: Obx(
-                    () {
-                      final enableShowDanmaku =
-                          plPlayerController.enableShowDanmaku.value;
-                      return IconButton(
-                        tooltip: "${enableShowDanmaku ? '关闭' : '开启'}弹幕",
-                        style: btnStyle,
-                        onPressed: () {
-                          final newVal = !enableShowDanmaku;
-                          plPlayerController.enableShowDanmaku.value = newVal;
-                          if (!plPlayerController.tempPlayerConf) {
-                            setting.put(
-                              SettingBoxKey.enableShowDanmaku,
-                              newVal,
-                            );
-                          }
-                        },
-                        icon: enableShowDanmaku
-                            ? const Icon(
-                                size: 20,
-                                CustomIcons.dm_on,
-                                color: Colors.white,
-                              )
-                            : const Icon(
-                                size: 20,
-                                CustomIcons.dm_off,
-                                color: Colors.white,
-                              ),
-                      );
-                    },
-                  ),
-                ),
               ],
-              SizedBox(
-                width: btnWidth,
-                height: btnHeight,
-                child: IconButton(
-                  tooltip: '弹幕设置',
-                  style: btnStyle,
-                  onPressed: showSetDanmaku,
-                  icon: const Icon(
-                    size: 20,
-                    CustomIcons.dm_settings,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              if (Platform.isAndroid ||
-                  OS.isHarmony ||
-                  (PlatformUtils.isDesktop && !isFullScreen))
-                SizedBox(
-                  width: btnWidth,
-                  height: btnHeight,
-                  child: IconButton(
-                    tooltip: '画中画',
-                    style: btnStyle,
-                    onPressed: () async {
-                      if (PlatformUtils.isDesktop) {
-                        plPlayerController.toggleDesktopPip();
-                        return;
-                      }
-                      if (await Floating().isPipAvailable) {
-                        if (context.mounted &&
-                            !videoPlayerServiceHandler!.enableBackgroundPlay) {
-                          final theme = Theme.of(context);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Column(
-                                children: [
-                                  const Row(
-                                    children: [
-                                      Icon(
-                                        Icons.check,
-                                        color: Colors.green,
-                                      ),
-                                      SizedBox(width: 10),
-                                      Text(
-                                        '画中画',
-                                        style: TextStyle(
-                                          fontSize: 15,
-                                          height: 1.5,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  const Text(
-                                    '建议开启【后台音频服务】\n'
-                                    '避免画中画没有暂停按钮',
-                                    style: TextStyle(
-                                      fontSize: 12.5,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                  Row(
-                                    children: [
-                                      TextButton(
-                                        style: ButtonStyle(
-                                          foregroundColor:
-                                              WidgetStatePropertyAll(
-                                                theme
-                                                    .snackBarTheme
-                                                    .actionTextColor,
-                                              ),
-                                        ),
-                                        onPressed: () {
-                                          plPlayerController.setBackgroundPlay(
-                                            true,
-                                          );
-                                          SmartDialog.showToast("请重新载入本页面刷新");
-                                        },
-                                        child: const Text('启用后台音频服务'),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      TextButton(
-                                        style: ButtonStyle(
-                                          foregroundColor:
-                                              WidgetStatePropertyAll(
-                                                theme
-                                                    .snackBarTheme
-                                                    .actionTextColor,
-                                              ),
-                                        ),
-                                        onPressed: () {},
-                                        child: const Text('不启用'),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                              duration: const Duration(seconds: 2),
-                              showCloseIcon: true,
-                            ),
-                          );
-                          await Future.delayed(const Duration(seconds: 3));
-                        }
-                        if (!context.mounted) return;
-                        final status = await plPlayerController.enterPip();
-                        if (OS.isHarmony && status == PiPStatus.unavailable) {
-                          // 系统小窗（自由窗口）内画中画无法启动，插件会拒绝
-                          SmartDialog.showToast('当前处于系统小窗，无法进入画中画');
-                        }
-                      }
-                    },
-                    icon: const Icon(
-                      Icons.picture_in_picture_outlined,
-                      size: 19,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              SizedBox(
-                width: btnWidth,
-                height: btnHeight,
-                child: IconButton(
-                  tooltip: "更多设置",
-                  style: btnStyle,
-                  onPressed: showSettingSheet,
-                  icon: const Icon(
-                    Icons.more_vert_outlined,
-                    size: 19,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
+            ),
+            title: title,
           ),
           if (showFSActionItem)
             Row(
@@ -2353,7 +2360,8 @@ class HeaderControlState extends State<HeaderControl>
               ],
             ),
           // 计入人数行的高度，收起顶部控制栏时避免溢出内容残留。
-          if (introController.isShowOnlineTotal || introController.isShowDmCount)
+          if (introController.isShowOnlineTotal ||
+              introController.isShowDmCount)
             const Visibility(
               visible: false,
               maintainAnimation: true,

@@ -21,7 +21,8 @@ import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
 import 'package:PiliPlus/models_new/video/video_shot/data.dart';
 import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
-import 'package:PiliPlus/pages/setting/models/play_settings.dart' show kMaxVolume;
+import 'package:PiliPlus/pages/setting/models/play_settings.dart'
+    show kMaxVolume;
 import 'package:PiliPlus/pages/sponsor_block/block_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/models/auto_audio_only_state.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
@@ -35,12 +36,14 @@ import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/models/speed_lock_hint.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/danmaku_options.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/player_rebuild_queue.dart';
 import 'package:PiliPlus/services/live_pip_overlay_service.dart';
 import 'package:PiliPlus/services/pip_overlay_service.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/asset_utils.dart';
 import 'package:PiliPlus/utils/device_utils.dart';
@@ -50,6 +53,7 @@ import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/feed_back.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
@@ -64,7 +68,8 @@ import 'package:easy_debounce/easy_throttle.dart';
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart'
     show ValueNotifier, clampDouble, kDebugMode;
-import 'package:flutter/services.dart' show HapticFeedback, DeviceOrientation;
+import 'package:flutter/services.dart'
+    show DeviceOrientation, HapticFeedback, KeyDownEvent;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
@@ -81,6 +86,7 @@ import 'package:window_manager/window_manager.dart';
 
 typedef PlayCallback = Future<void>? Function();
 typedef PlayerInitCallback = Future<void> Function();
+typedef PlayOwner = ({String tag, Type type});
 
 class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   Player? _videoPlayerController;
@@ -245,9 +251,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     required String bvid,
     required int cid,
   }) =>
-      dataStatus.value == DataStatus.loaded &&
-      _bvid == bvid &&
-      this.cid == cid;
+      dataStatus.value == DataStatus.loaded && _bvid == bvid && this.cid == cid;
 
   /// 当前播放视频的标识、进度与播放状态快照，用于鸿蒙跨设备接续；
   /// 直播（由 LiveRoomController 提供快照）或无视频时为 null
@@ -445,8 +449,19 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (!autoEnter && OS.isHarmony && HarmonyChannel.isMiniWindowLandscape) {
       return Future.value(PiPStatus.unavailable);
     }
-    if (videoPlayerController != null) {
-      final state = videoPlayerController!.state;
+    if (videoPlayerController case NativePlayer(:final state)) {
+      if (Platform.isIOS) {
+        if (videoController?.id.value case final textureId?) {
+          IOSPipHelper.enter(
+            textureId,
+            width: state.width == 0 ? width : state.width,
+            height: state.height == 0 ? height : state.height,
+            autoEnter: autoEnter,
+            state: _iosPipState(state),
+          );
+        }
+        return Future.value(PiPStatus.unavailable);
+      }
       return PageUtils.enterPip(
         isAuto: autoEnter,
         width: state.width == 0 ? width : state.width,
@@ -469,10 +484,29 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (_isAutoEnterPip) {
       if (OS.isHarmony) {
         Floating().setAutoPip(false);
+      } else if (Platform.isIOS) {
+        IOSPipHelper.disableAutoEnter();
       } else {
-        Utils.channel.invokeMethod('setPipAutoEnterEnabled', {
-          'autoEnable': false,
-        });
+        PiliAndroidHelper.disableAutoEnterPip();
+      }
+    }
+  }
+
+  Map<String, Object> _iosPipState(PlayerState state, [Duration? position]) {
+    return {
+      'isPlaying': playerStatus.isPlaying,
+      'isBuffering': isBuffering.value,
+      'isLive': isLive,
+      'position': (position ?? state.position).inMilliseconds,
+      'duration': durationInMilliseconds,
+      'speed': state.rate,
+    };
+  }
+
+  void _updateIOSPip([Duration? position]) {
+    if (Platform.isIOS && IOSPipHelper.needsUpdate) {
+      if (_videoPlayerController case final player?) {
+        IOSPipHelper.update(_iosPipState(player.state, position));
       }
     }
   }
@@ -543,6 +577,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late final showFsScreenshotBtn = Pref.showFsScreenshotBtn;
   late final showFsLockBtn = Pref.showFsLockBtn;
   late final showFsLockBtnRight = Pref.showFsLockBtnRight;
+  late final lockFsRotation = Pref.lockFsRotation;
   late final keyboardControl = Pref.keyboardControl;
   late final uiScale = Pref.uiScale;
 
@@ -569,8 +604,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       (tempPlayerConf ? 0 : Pref.videoSaturation).obs;
   late final RxInt videoGamma = (tempPlayerConf ? 0 : Pref.videoGamma).obs;
   late final RxInt videoHue = (tempPlayerConf ? 0 : Pref.videoHue).obs;
-  late final RxInt audioDelayMs =
-      (tempPlayerConf ? 0 : Pref.audioDelayMs).obs;
+  late final RxInt audioDelayMs = (tempPlayerConf ? 0 : Pref.audioDelayMs).obs;
   Timer? _videoPictureSaveTimer;
 
   late int? cacheVideoQa = PlatformUtils.isMobile ? null : Pref.defaultVideoQa;
@@ -724,10 +758,16 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     return _instance != null;
   }
 
-  static void setPlayCallBack(PlayCallback? playCallBack) {
+  static void setPlayCallBack(
+    PlayCallback? playCallBack, {
+    PlayOwner? playOwner,
+  }) {
     _playCallBack = playCallBack;
+    _playOwner = playOwner;
   }
 
+  static PlayOwner? _playOwner;
+  static PlayOwner? get playOwner => _playOwner;
   static PlayCallback? _playCallBack;
 
   static Future<void>? playIfExists() {
@@ -866,7 +906,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         portraitDownMode();
       case .landscapeLeft:
         _cancelAutoExitFs();
-        if (_isVertical && controlsLock.value) return;
+        if (controlsLock.value && (lockFsRotation || _isVertical)) return;
         if (!horizontalScreen && !isFullScreen) {
           triggerFullScreen(orientation: deviceOrientation, isManualFS: false);
         } else {
@@ -874,7 +914,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         }
       case .landscapeRight:
         _cancelAutoExitFs();
-        if (_isVertical && controlsLock.value) return;
+        if (controlsLock.value && (lockFsRotation || _isVertical)) return;
         if (!horizontalScreen && !isFullScreen) {
           triggerFullScreen(orientation: deviceOrientation, isManualFS: false);
         } else {
@@ -899,6 +939,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     if (Platform.isAndroid) {
+      // onPipChanged 回调是本 fork 的系统 PiP 状态同步通道（上游没有），
+      // 与下方的 autoPiP 注册共用同一个 MethodChannel handler
       Utils.channel.setMethodCallHandler((call) async {
         if (call.method == 'onPipChanged') {
           final bool isInPip = call.arguments as bool;
@@ -911,14 +953,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
       if (autoPiP) {
         if (DeviceUtils.sdkInt < 31) {
-          AndroidHelper$ToDart.onUserLeaveHint = Runnable.implement(
-            $Runnable(run: _onUserLeaveHint),
-          );
+          final func = Runnable.implement($Runnable(run: _onUserLeaveHint));
+          AndroidHelper$ToDart.onUserLeaveHint = func;
+          func.release();
         } else {
           _isAutoEnterPip = true;
         }
       }
-    } else if (autoPiP && OS.isHarmony) {
+    } else if (autoPiP &&
+        (OS.isHarmony || (Platform.isIOS && IOSPipHelper.isAvailable))) {
       _isAutoEnterPip = true;
     }
   }
@@ -992,11 +1035,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     resetAllVideoPictureParameters(persist: false);
   }
 
-  int _normalizeVideoPictureParameter(num value) =>
-      value.round().clamp(
+  int _normalizeVideoPictureParameter(num value) => value
+      .round()
+      .clamp(
         videoPictureParameterMin,
         videoPictureParameterMax,
-      ).toInt();
+      )
+      .toInt();
 
   RxInt? _videoPictureParameterState(String property) => switch (property) {
     'brightness' => videoBrightness,
@@ -1369,10 +1414,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       'video-sync': Pref.videoSync,
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
       'stream-lavf-o': 'reconnect=1',
-      'volume': (PlatformUtils.isMobile
-              ? (Pref.enableAppVolume ? volume.value * 100 : Pref.playerVolume)
-              : volume.value * 100)
-          .toString(),
+      'volume':
+          (PlatformUtils.isMobile
+                  ? (Pref.enableAppVolume
+                        ? volume.value * 100
+                        : Pref.playerVolume)
+                  : volume.value * 100)
+              .toString(),
       'volume-max': kMaxVolume.toString(),
       // 按设定峰值色调映射时测量片源的实际峰值，盖掉 media-kit 默认的 no
       if (OhosHdrOutput.measuresPeak(output)) 'hdr-compute-peak': 'yes',
@@ -1407,6 +1455,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       ),
     );
     // await player.setAudioTrack(.auto());
+
+    if (Platform.isAndroid) {
+      // Avoid sizing the surface using mpv's idle window between media loads.
+      player.setProperty('force-window', 'no');
+    }
 
     _startListeners(player.platform!.maybeAsNativePlayer);
 
@@ -1613,6 +1666,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       speed: playbackSpeed,
       debugLabel: debugLabel,
     );
+    _updateIOSPip(position);
   }
 
   /// 播放事件监听
@@ -1690,6 +1744,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
                   AppLifecycleState.resumed) {
             _disableAutoEnterPip();
           }
+          _updateIOSPip();
           // 鸿蒙：进入画中画的退后台过程中，系统会直接把 mpv 置为暂停
           //（应用层无任何 pause 调用，插桩证实；auto-start 武装与否均如此）。
           // 画中画窗口可见即应继续播放，且普通 play() 即可恢复（等效于
@@ -1750,7 +1805,10 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           element(position);
         }
       }),
-      stream.duration.listen(updateDuration),
+      stream.duration.listen((Duration duration) {
+        updateDuration(duration);
+        _updateIOSPip();
+      }),
       stream.buffer.listen((Duration buffer) {
         buffered.value = buffer.inSeconds;
       }),
@@ -1918,6 +1976,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     danmakuController?.clear();
     try {
       await _videoPlayerController?.seek(position);
+      _updateIOSPip(position);
     } catch (e) {
       if (kDebugMode) debugPrint('seek failed: $e');
     }
@@ -1949,24 +2008,19 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   Future<void> setPlaybackSpeed(double speed) async {
     lastPlaybackSpeed = playbackSpeed;
 
-    if (speed == _videoPlayerController?.state.rate) {
-      return;
-    }
+    if (speed == _videoPlayerController?.state.rate) return;
 
     await _setRate(speed);
-    _playbackSpeed.value = speed;
+    if (!isLive) _playbackSpeed.value = speed;
     _updatePlaybackState();
     if (danmakuController != null) {
       try {
-        DanmakuOption currentOption = danmakuController!.option;
-        double defaultDuration = currentOption.duration * lastPlaybackSpeed;
-        double defaultStaticDuration =
-            currentOption.staticDuration * lastPlaybackSpeed;
-        DanmakuOption updatedOption = currentOption.copyWith(
-          duration: defaultDuration / speed,
-          staticDuration: defaultStaticDuration / speed,
+        danmakuController?.updateOption(
+          danmakuController!.option.copyWith(
+            duration: DanmakuOptions.danmakuDuration / speed,
+            staticDuration: DanmakuOptions.danmakuStaticDuration / speed,
+          ),
         );
-        danmakuController!.updateOption(updatedOption);
       } catch (_) {}
     }
   }
@@ -2164,8 +2218,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             FlutterVolumeController.updateShowSystemUI(false);
             await FlutterVolumeController.setVolume(volume);
             actualVolume.value =
-                await FlutterVolumeController.getVolume() ??
-                actualVolume.value;
+                await FlutterVolumeController.getVolume() ?? actualVolume.value;
           }
         }
       } catch (err) {
@@ -2640,7 +2693,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             }
           }
         } else {
-          await enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
+          enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
         }
       } else {
         if (PlatformUtils.isMobile) {
@@ -2662,7 +2715,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             await Future<void>.delayed(const Duration(milliseconds: 32));
           }
         } else {
-          await exitDesktopFullScreen();
+          exitDesktopFullScreen();
         }
       }
     } finally {
@@ -3106,8 +3159,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   void _interruptAutoAudioRestore() {
-    if (!_autoAudioRestoreInProgress &&
-        _autoAudioRestoreCompleter == null) {
+    if (!_autoAudioRestoreInProgress && _autoAudioRestoreCompleter == null) {
       return;
     }
     _autoAudioRestoreGeneration++;
@@ -3274,8 +3326,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       _clearPreview();
     }
     if (Platform.isAndroid) {
-      AndroidHelper$ToDart.onUserLeaveHint?.release();
       AndroidHelper$ToDart.onUserLeaveHint = null;
+    } else if (Platform.isIOS) {
+      IOSPipHelper.dispose();
     }
     _timer?.cancel();
     persistVideoPictureSettings();
@@ -3545,7 +3598,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     previewCache.clear();
   }
 
+  /// 上游的 getVideoShot 与之并存的 ensureVideoShot（本 fork）：
+  /// ensureVideoShot 会做 _canUseSeekPreview 守卫 + 迟到响应丢弃，
+  /// 保留本 fork 版本，删除上游的简单版避免命名冲突。
+  int _screenshotState = 0;
   Future<void> takeScreenshot() async {
+    if (_screenshotState > 0) return;
+    _screenshotState = 1;
     SmartDialog.showToast('截图中');
     // 鸿蒙 media_kit fork 的 screenshot 返回 Uint8List（上游 fork 返回 ui.Image）
     final bytes = await videoPlayerController?.screenshot(format: 'image/png');
@@ -3592,6 +3651,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     } else {
       SmartDialog.showToast('截图失败');
     }
+    _screenshotState = 0;
   }
 
   void onPopInvokedWithResult(

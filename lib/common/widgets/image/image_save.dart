@@ -15,11 +15,27 @@ import 'package:get/get.dart';
 
 const _iconSize = 20.0;
 
+void showPgcCover({
+  required String? title,
+  required String? cover,
+  dynamic aid,
+  String? bvid,
+}) => imageSaveDialog(
+  title: title,
+  cover: cover,
+  aid: aid,
+  bvid: bvid,
+  orientation: .portrait,
+  aspectRatio: Style.aspectRatio3x4,
+);
+
 void imageSaveDialog({
   required String? title,
   required String? cover,
   dynamic aid,
   String? bvid,
+  Orientation orientation = .landscape,
+  double aspectRatio = Style.aspectRatio16x9,
 }) {
   final wasVisible = HarmonyChannel.hdsBarVisible;
   HarmonyChannel.setShellBarsHidden(true);
@@ -28,11 +44,19 @@ void imageSaveDialog({
       transitionDuration: const Duration(milliseconds: 200),
       pageBuilder: (context, animation, secondaryAnimation) {
         final colorScheme = ColorScheme.of(context);
-        final imgWidth = MediaQuery.sizeOf(context).shortestSide - 16;
-        final height = imgWidth / Style.aspectRatio16x9;
+        final double width, height;
+        switch (orientation) {
+          case .portrait:
+            height = MediaQuery.sizeOf(context).shortestSide * 0.8;
+            width = height * aspectRatio;
+          case .landscape:
+            width = MediaQuery.sizeOf(context).shortestSide - 16;
+            height = width / aspectRatio;
+        }
+
         return Center(
           child: Container(
-            width: imgWidth,
+            width: width,
             margin: const .symmetric(horizontal: Style.safeSpace),
             decoration: _ImageDecoration(
               imageHeight: height,
@@ -47,8 +71,8 @@ void imageSaveDialog({
                   child: NetworkImgLayer(
                     src: cover,
                     quality: 100,
-                    width: imgWidth,
-                    height: imgWidth / Style.aspectRatio16x9,
+                    width: width,
+                    height: height,
                     borderRadius: const .vertical(top: Style.imgRadius),
                   ),
                 ),

@@ -4,9 +4,13 @@
 /// `floating` 插件提供。
 library;
 
+import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 
 abstract final class PiliAndroidHelper {
+  /// 上游迁到 `AndroidHelper.isPipAvailable`（jnigen 绑定）；鸿蒙侧同名空实现恒为 false。
+  static final isPipAvailable = AndroidHelper.isPipAvailable;
+
   static void back() {}
 
   static void biliSendCommAntifraud(

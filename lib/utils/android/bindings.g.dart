@@ -39,6 +39,10 @@ abstract final class AndroidHelper {
   static bool isDomainVerified(String domain) => false;
 
   static String? openUrl(String url) => null;
+
+  static void back() {}
+
+  static void openLinkVerifySettings() {}
 }
 
 /// 对应 jnigen 生成的 Java -> Dart 回调注册点。

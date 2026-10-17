@@ -51,7 +51,8 @@
 <div align="center">
     <h1>PiliNara</h1>
 <div align="center">
-    
+
+</div>
 </div>
     <p>基于PiliPlus做了一些自用修改</p>
     
@@ -351,7 +352,7 @@ Fork特性：
 
 ## 下载
 
-可以通过右侧 release 进行下载或拉取代码到本地进行编译
+可以从 [Releases](https://github.com/dev4harmony/PiliNara/releases) 下载，或克隆仓库拉取代码后在本地编译。
 
 ### Arch Linux
 

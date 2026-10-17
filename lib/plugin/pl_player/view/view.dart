@@ -64,6 +64,7 @@ import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/feed_back.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/mobile_observer.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
@@ -85,10 +86,10 @@ import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:window_manager/window_manager.dart';
 import 'package:os_type/os_type.dart';
 import 'package:screen_brightness_platform_interface/constant/plugin_channel.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
-import 'package:window_manager/window_manager.dart';
 
 part 'widgets.dart';
 
@@ -431,6 +432,8 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Keep playing in the PiP window.
+    if (Platform.isIOS && IOSPipHelper.isActive) return;
     final player = plPlayerController.videoPlayerController;
     if (player == null) return;
     if (state != AppLifecycleState.paused &&
@@ -528,7 +531,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   ) {
     final videoDetail = introController.videoDetail.value;
     final isSeason = videoDetail.ugcSeason != null;
-    final isPart = videoDetail.pages != null && videoDetail.pages!.length > 1;
+    final isPart = videoDetail.hasParts;
     final isPgc = !videoDetailController.isUgc;
     final isPlayAll = videoDetailController.isPlayAll;
     final anySeason = isSeason || isPart || isPgc || isPlayAll;
@@ -1136,16 +1139,14 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       if (!plPlayerController.isDesktopPip) .fullscreen,
     ];
     return PlayerBar(
-      children: [
-        Row(
-          mainAxisSize: .min,
-          children: userSpecifyItemLeft.map(progressWidget).toList(),
-        ),
-        Row(
-          mainAxisSize: .min,
-          children: userSpecifyItemRight.map(progressWidget).toList(),
-        ),
-      ],
+      left: Row(
+        mainAxisSize: .min,
+        children: userSpecifyItemLeft.map(progressWidget).toList(),
+      ),
+      right: Row(
+        mainAxisSize: .min,
+        children: userSpecifyItemRight.map(progressWidget).toList(),
+      ),
     );
   }
 
@@ -1186,8 +1187,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   }
 
   void _initDanmakuMask() {
-    final maskController =
-        widget.videoDetailController?.danmakuMaskController;
+    final maskController = widget.videoDetailController?.danmakuMaskController;
     if (maskController == null || plPlayerController.isLive) return;
     // 本仓库的 videoController 是委托到 plPlayerController 的可空 getter
     //（上游是 initState 里赋值的 late 字段），掩码驱动需要非空实例。
@@ -1212,8 +1212,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     final driver = _maskDriver;
     if (driver == null) return;
     _maskDriver = null;
-    widget.videoDetailController?.danmakuMaskController.frame
-        .removeListener(driver.update);
+    widget.videoDetailController?.danmakuMaskController.frame.removeListener(
+      driver.update,
+    );
     _transformationController.removeListener(driver.update);
     videoController?.rect.removeListener(driver.update);
     for (final subscription in _maskSubscriptions) {
@@ -1236,7 +1237,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     final height = rect.height / _devicePixelRatio;
     final aspectRatio = videoFit.aspectRatio;
     final videoSize = Size(
-      aspectRatio == null ? rect.width / _devicePixelRatio : height * aspectRatio,
+      aspectRatio == null
+          ? rect.width / _devicePixelRatio
+          : height * aspectRatio,
       height,
     );
     final fit = DanmakuMaskGeometry.fittedBoxTransform(
@@ -1781,7 +1784,8 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     final isLive = plPlayerController.isLive;
     // 锁定按钮显示在右侧：与截图按钮同组垂直居中
     final lockBtnOnRight =
-        plPlayerController.showFsLockBtnRight && plPlayerController.showFsLockBtn;
+        plPlayerController.showFsLockBtnRight &&
+        plPlayerController.showFsLockBtn;
 
     final child = Stack(
       fit: StackFit.passthrough,
@@ -1978,9 +1982,11 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
               ignoring: true,
               child: Obx(
                 () {
-                  final desktopPreview = PlatformUtils.isDesktop &&
+                  final desktopPreview =
+                      PlatformUtils.isDesktop &&
                       plPlayerController.showDesktopProgressFeedback.value;
-                  final opacity = desktopPreview ||
+                  final opacity =
+                      desktopPreview ||
                           (!PlatformUtils.isDesktop &&
                               plPlayerController.isSeeking.value)
                       ? 1.0
@@ -2633,8 +2639,8 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
               minScale: plPlayerController.enableShrinkVideoSize ? 0.75 : 1,
               maxScale: 2.0,
               boundaryMargin: plPlayerController.enableShrinkVideoSize
-                            ? const .all(double.infinity)
-                            : .zero,
+                  ? const .all(double.infinity)
+                  : .zero,
               panAxis: .aligned,
               transformationController: _transformationController,
               childKey: _videoKey,
@@ -2673,7 +2679,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
             ),
           ),
         );
-      }
+      },
     );
   }
 

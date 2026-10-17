@@ -51,6 +51,7 @@ analysis_benchmark.json
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+/flutter_pub_cache/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages

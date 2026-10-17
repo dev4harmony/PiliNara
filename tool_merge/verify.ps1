@@ -1,4 +1,4 @@
-﻿# 合并结果验收脚本 —— 对应 AGENT.md §8「验收清单」
+# 合并结果验收脚本 —— 对应 AGENT.md §8「验收清单」
 # 用法: pwsh -File tool_merge/verify.ps1  (在仓库根目录执行)
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
@@ -29,7 +29,7 @@ $must = @(
   'lib/harmony_adapt/shell_bars_observer.dart',
   'lib/media_kit_adapt/media_kit_adapt.dart',
   '.vscode/tasks.json', '.vscode/build_env.dart',
-  '.github/workflows/pr_check.yml', '.github/workflows/release.yml',
+  '.github/workflows/pr-check-ohos.yml', '.github/workflows/release-ohos.yml',
   'lib/utils/android/bindings.g.dart'
 )
 foreach ($f in $must) {
