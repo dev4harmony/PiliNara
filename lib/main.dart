@@ -20,12 +20,13 @@ import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/services/route_stack_observer.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
-import 'package:PiliPlus/utils/calc_window_position.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
+import 'package:PiliPlus/utils/calc_window_position.dart';
 import 'package:PiliPlus/utils/extension/core_palettes_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/font_utils.dart';
 import 'package:PiliPlus/utils/image_memory_cleaner.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/json_file_handler.dart';
 import 'package:PiliPlus/utils/max_screen_size.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
@@ -81,7 +82,8 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (OS.isHarmony) {
-    downloadPath = 'storage/Users/currentUser/Download/com.dev4harmony.pilinara';
+    downloadPath =
+        'storage/Users/currentUser/Download/com.dev4harmony.pilinara';
   } else if (Platform.isAndroid) {
     final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
     downloadPath = externalStorageDirPath != null
@@ -132,6 +134,7 @@ void main() async {
     await Future.wait([
       if (Pref.horizontalScreen) ?fullMode() else ?portraitUpMode(),
       setupServiceLocator(),
+      if (Platform.isIOS) IOSPipHelper.init(),
     ]);
   } else if (OS.isHarmony) {
     // 鸿蒙 2in1 设备 isPCOS 为 true（isMobile 为 false），但同样需要媒体服务，
@@ -266,6 +269,7 @@ void main() async {
     });
   }
 }
+
 KeyEventResult _onKeyEvent(KeyEvent event) {
   if (event.logicalKey == LogicalKeyboardKey.escape && event is KeyDownEvent) {
     MyApp._onBack();

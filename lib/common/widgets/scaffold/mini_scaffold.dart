@@ -57,6 +57,7 @@ class MiniScaffoldState extends State<MiniScaffold>
     BoxConstraints? constraints,
     bool? enableDrag,
     bool shouldDisposeAnimationController = true,
+    double dragHeight = kBottomSheetDragHeight,
   }) {
     final completer = Completer<void>();
     final bottomSheetKey = GlobalKey<_StandardBottomSheetState>();
@@ -120,6 +121,7 @@ class MiniScaffoldState extends State<MiniScaffold>
       key: bottomSheetKey,
       animationController: animationController,
       enableDrag: enableDrag ?? !isPersistent,
+      dragHeight: dragHeight,
       onClosing: () {
         if (_currentBottomSheet == null) {
           return;
@@ -161,12 +163,17 @@ class MiniScaffoldState extends State<MiniScaffold>
     );
   }
 
+  /// 关闭当前 bottom sheet（含 LocalHistoryEntry 型）。供视频页接管共享的
+  /// MiniScaffoldState 时清掉上一页遗留的 sheet
+  void closeBottomSheet() => _currentBottomSheet?.close();
+
   MiniBottomSheetController showBottomSheet(
     WidgetBuilder builder, {
     BoxConstraints? constraints,
     bool? enableDrag,
     AnimationController? transitionAnimationController,
     AnimationStyle? sheetAnimationStyle,
+    double dragHeight = kBottomSheetDragHeight,
   }) {
     assert(debugCheckHasMediaQuery(context));
 
@@ -185,6 +192,7 @@ class MiniScaffoldState extends State<MiniScaffold>
         animationController: controller,
         constraints: constraints,
         enableDrag: enableDrag,
+        dragHeight: dragHeight,
         shouldDisposeAnimationController: transitionAnimationController == null,
       );
     });
@@ -236,6 +244,7 @@ class _StandardBottomSheet extends StatefulWidget {
     this.isPersistent = false,
     this.constraints,
     this.onDispose,
+    this.dragHeight = kBottomSheetDragHeight,
   });
 
   final AnimationController
@@ -247,6 +256,7 @@ class _StandardBottomSheet extends StatefulWidget {
   final WidgetBuilder builder;
   final bool isPersistent;
   final BoxConstraints? constraints;
+  final double dragHeight;
 
   @override
   _StandardBottomSheetState createState() => _StandardBottomSheetState();
@@ -312,6 +322,7 @@ class _StandardBottomSheetState extends State<_StandardBottomSheet> {
       onClosing: widget.onClosing!,
       builder: widget.builder,
       constraints: widget.constraints,
+      dragHeight: widget.dragHeight,
     );
     if (widget.enableDrag) {
       return AnimatedBuilder(

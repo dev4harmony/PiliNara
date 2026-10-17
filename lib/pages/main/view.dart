@@ -1,8 +1,8 @@
 import 'dart:io';
 
+import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/assets.dart';
 import 'package:PiliPlus/common/constants.dart';
-import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/floating_navigation_bar.dart';
 import 'package:PiliPlus/common/widgets/flutter/pop_scope.dart';
 import 'package:PiliPlus/common/widgets/flutter/tabs.dart';
@@ -203,9 +203,12 @@ class _MainAppState extends PopScopeState<MainApp>
         _mainController.refreshRecommendations();
   }
 
-  @override
-  void onWindowMaximize() {
-    _setting.put(SettingBoxKey.isWindowMaximized, true);
+  @pragma('vm:prefer-inline')
+  static void _onBack() {
+    if (OS.isHarmony) SystemNavigator.pop();
+    if (Platform.isAndroid) {
+      PiliAndroidHelper.back();
+    }
   }
 
   @override
@@ -332,14 +335,6 @@ class _MainAppState extends PopScopeState<MainApp>
       ],
     );
     await trayManager.setContextMenu(trayMenu);
-  }
-
-  @pragma('vm:prefer-inline')
-  static void _onBack() {
-    if (OS.isHarmony) SystemNavigator.pop();
-    if (Platform.isAndroid) {
-      PiliAndroidHelper.back();
-    }
   }
 
   @override

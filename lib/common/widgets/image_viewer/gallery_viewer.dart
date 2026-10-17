@@ -22,7 +22,9 @@ import 'package:PiliPlus/common/widgets/colored_box_transition.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
 import 'package:PiliPlus/common/widgets/flutter/page/page_view.dart';
 import 'package:PiliPlus/common/widgets/flutter/popup_menu.dart';
+import 'package:PiliPlus/common/widgets/gesture/image_double_tap_gesture_recognizer.dart';
 import 'package:PiliPlus/common/widgets/gesture/image_horizontal_drag_gesture_recognizer.dart';
+import 'package:PiliPlus/common/widgets/gesture/image_tap_gesture_recognizer.dart';
 import 'package:PiliPlus/common/widgets/image_viewer/image.dart';
 import 'package:PiliPlus/common/widgets/image_viewer/loading_indicator.dart';
 import 'package:PiliPlus/common/widgets/image_viewer/viewer.dart';
@@ -40,8 +42,7 @@ import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
-import 'package:easy_debounce/easy_throttle.dart';
-import 'package:flutter/gestures.dart';
+import 'package:flutter/gestures.dart' show LongPressGestureRecognizer;
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart' hide Image, PageView;
@@ -91,8 +92,8 @@ class _GalleryViewerState extends State<GalleryViewer>
 
   late final PageController _pageController;
 
-  late final TapGestureRecognizer _tapGestureRecognizer;
-  late final DoubleTapGestureRecognizer _doubleTapGestureRecognizer;
+  late final ImageTapGestureRecognizer _tapGestureRecognizer;
+  late final ImageDoubleTapGestureRecognizer _doubleTapGestureRecognizer;
   late final ImageHorizontalDragGestureRecognizer
   _horizontalDragGestureRecognizer;
   late final LongPressGestureRecognizer _longPressGestureRecognizer;
@@ -143,14 +144,14 @@ class _GalleryViewerState extends State<GalleryViewer>
     _pageController = PageController(initialPage: widget.initIndex);
 
     final gestureSettings = MediaQuery.maybeGestureSettingsOf(Get.context!);
-    _tapGestureRecognizer = TapGestureRecognizer()
+    _tapGestureRecognizer = ImageTapGestureRecognizer()
       // ..onTap = _onTap
       ..gestureSettings = gestureSettings;
     if (PlatformUtils.isDesktop) {
       _tapGestureRecognizer.onSecondaryTapUp = _showDesktopMenu;
     }
-    _doubleTapGestureRecognizer = DoubleTapGestureRecognizer()
-      ..onDoubleTap = () {}
+    _doubleTapGestureRecognizer = ImageDoubleTapGestureRecognizer()
+      // 时间戳记录已由构造函数内的 onDoubleTap 注册（3.44.9 无 checkUp 可覆写）
       ..gestureSettings = gestureSettings;
     _horizontalDragGestureRecognizer = ImageHorizontalDragGestureRecognizer();
     _longPressGestureRecognizer = LongPressGestureRecognizer()
@@ -521,12 +522,18 @@ class _GalleryViewerState extends State<GalleryViewer>
     return Hero(tag: '${item.url}${widget.tag}', child: child);
   }
 
+  static const Duration _kTapDiff = Duration(milliseconds: 300);
+
   void _onTap() {
-    EasyThrottle.throttle(
-      'VIEWER_TAP',
-      const Duration(milliseconds: 555),
-      Get.back,
-    );
+    // 3.44.9 拿不到双击的 PointerUpEvent 时间戳，改用墙钟对比
+    // （ImageTapGestureRecognizer / ImageDoubleTapGestureRecognizer 同步记录）。
+    if (ImageTapWallClock.instance.lastTapUp.difference(
+          _doubleTapGestureRecognizer.timeStamp,
+        ) <
+        _kTapDiff) {
+      return;
+    }
+    Get.back();
   }
 
   void _onLongPress() {

@@ -1,5 +1,6 @@
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/loading_widget/http_error.dart';
+import 'package:PiliPlus/common/widgets/view_insets_safe_area.dart';
 import 'package:PiliPlus/common/widgets/view_sliver_safe_area.dart';
 import 'package:PiliPlus/pages/search/controller.dart' show DebounceStreamState;
 import 'package:PiliPlus/pages/search/widgets/search_text.dart';
@@ -16,10 +17,9 @@ import 'package:PiliPlus/utils/grid.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/waterfall.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:get/get.dart';
-import 'package:waterfall_flow/waterfall_flow.dart'
-    hide SliverWaterfallFlowDelegateWithMaxCrossAxisExtent;
+import 'package:material_ui/material_ui.dart';
 
 class SettingsSearchPage extends StatefulWidget {
   const SettingsSearchPage({super.key});
@@ -149,29 +149,28 @@ class _SettingsSearchPageState
           ),
         ),
       ),
-      body: CustomScrollView(
-        slivers: [
-          ViewSliverSafeArea(
-            sliver: Obx(() {
-              if (_list.isNotEmpty) {
-                return SliverWaterfallFlow(
-                  gridDelegate:
-                      SliverWaterfallFlowDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: Grid.smallCardWidth * 2,
-                      ),
-                  delegate: SliverChildBuilderDelegate(
-                    (_, index) => _list[index].widget,
-                    childCount: _list.length,
-                  ),
-                );
-              }
-              // 关键词为空时展示历史；有关键词却没结果才是「无结果」
-              return _keyword.value.isEmpty
-                  ? _buildHistory(theme)
-                  : const HttpError();
-            }),
-          ),
-        ],
+      body: ViewInsetsSafeArea(
+        child: CustomScrollView(
+          slivers: [
+            ViewSliverSafeArea(
+              sliver: Obx(() {
+                if (_list.isNotEmpty) {
+                  return SliverMasonryGrid(
+                    gridDelegate: gridDelegate,
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) => _list[index].widget,
+                      childCount: _list.length,
+                    ),
+                  );
+                }
+                // 关键词为空时展示历史；有关键词却没结果才是「无结果」
+                return _keyword.value.isEmpty
+                    ? _buildHistory(theme)
+                    : const HttpError();
+              }),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -243,4 +242,8 @@ class _SettingsSearchPageState
       ),
     );
   }
+
+  late final gridDelegate = SliverSimpleGridDelegateWithMaxCrossAxisExtent_(
+    maxCrossAxisExtent: Grid.smallCardWidth * 2,
+  );
 }

@@ -920,6 +920,8 @@ class AudioController extends GetxController
       ?..onPlay = null
       ..onPause = null
       ..onSeek = null
+      ..onSkipToNext = null
+      ..onSkipToPrevious = null
       ..onVideoDetailDispose(heroTag)
       ..onSkipToPrevious = _savedOnSkipToPrevious
       ..onSkipToNext = _savedOnSkipToNext
