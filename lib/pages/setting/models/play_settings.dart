@@ -14,7 +14,9 @@ import 'package:PiliPlus/plugin/pl_player/models/bottom_progress_behavior.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
+import 'package:PiliPlus/utils/ios/pip_helper.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -73,6 +75,13 @@ List<SettingsModel> get playSettings => [
     leading: Icon(Icons.lock_outline),
     setKey: SettingBoxKey.showFsLockBtn,
     defaultVal: true,
+  ),
+  const SwitchModel(
+    title: '锁定后禁止重力感应旋转',
+    subtitle: '全屏锁定后不再随设备方向翻转（仅横屏视频生效）',
+    leading: Icon(Icons.screen_lock_rotation),
+    setKey: SettingBoxKey.lockFsRotation,
+    defaultVal: false,
   ),
   const SwitchModel(
     title: '锁定按钮显示在右侧',
@@ -288,19 +297,25 @@ List<SettingsModel> get playSettings => [
     setKey: SettingBoxKey.enableInAppPip,
     defaultVal: true,
   ),
-  if (Platform.isAndroid || OS.isHarmony) ...[
+  if ((Platform.isAndroid && PiliAndroidHelper.isPipAvailable) ||
+      (Platform.isIOS && IOSPipHelper.isAvailable) ||
+      OS.isHarmony)
     SwitchModel(
       title: '后台画中画',
       subtitle: '进入后台时以小窗形式（PiP）播放',
       leading: const Icon(Icons.picture_in_picture_outlined),
       setKey: SettingBoxKey.autoPiP,
       defaultVal: false,
-      onChanged: (val) {
-        if (val && !videoPlayerServiceHandler!.enableBackgroundPlay) {
-          SmartDialog.showToast('建议开启后台音频服务');
-        }
-      },
+      onChanged: Platform.isAndroid
+          ? (val) {
+              if (val && !videoPlayerServiceHandler!.enableBackgroundPlay) {
+                SmartDialog.showToast('建议开启后台音频服务');
+              }
+            }
+          : null,
     ),
+  // PiP on iOS only shows the video frames, without danmaku.
+  if (Platform.isAndroid || OS.isHarmony)
     const SwitchModel(
       title: '应用内小窗转后台画中画（实验性）',
       subtitle: '实验性功能：应用内小窗存在时，退到后台自动切换为系统 PiP；可能因系统差异出现异常',
@@ -315,7 +330,6 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.pipNoDanmaku,
       defaultVal: false,
     ),
-  ],
   const SwitchModel(
     title: '全屏手势反向',
     subtitle: '默认播放器中部向上滑动进入全屏，向下退出\n开启后向下全屏，向上退出',

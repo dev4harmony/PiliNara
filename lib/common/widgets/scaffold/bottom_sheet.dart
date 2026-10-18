@@ -1,6 +1,8 @@
 import 'package:flutter/gestures.dart' show VerticalDragGestureRecognizer;
 import 'package:material_ui/material_ui.dart';
 
+const double kBottomSheetDragHeight = 45.0;
+
 const double _minFlingVelocity = 700.0;
 const double _closeProgressThreshold = 0.5;
 
@@ -10,7 +12,12 @@ const double _closeProgressThreshold = 0.5;
 ///
 /// The upstream project extends the SDK's public `BottomSheetState` to build
 /// this widget, but the HarmonyOS Flutter SDK keeps the bottom sheet state
-/// private. This port reimplements the same widget against the public API.
+/// private. This port reimplements the same widget against the public API —
+/// keep it that way on this branch: upstream 2.1.6's `BottomSheetState` /
+/// `StandardBottomSheet` / `BottomSheetStack` are all private (or absent) in
+/// the ohos SDK, so importing them here cannot compile.
+/// `dragHeight` (upstream 2.1.6) is kept: only pointers that go down within
+/// that distance from the top of the sheet start a drag.
 // ignore: camel_case_types
 class BottomSheet_ extends StatefulWidget {
   const BottomSheet_({
@@ -22,6 +29,7 @@ class BottomSheet_ extends StatefulWidget {
     this.constraints,
     required this.onClosing,
     required this.builder,
+    this.dragHeight = kBottomSheetDragHeight,
   });
 
   final AnimationController? animationController;
@@ -32,6 +40,10 @@ class BottomSheet_ extends StatefulWidget {
   final VoidCallback onClosing;
   final WidgetBuilder builder;
 
+  /// Only pointers that go down within this distance from the top of the
+  /// sheet start a drag.
+  final double dragHeight;
+
   @override
   State<BottomSheet_> createState() => _BottomSheet_State();
 }
@@ -40,11 +52,14 @@ class BottomSheet_ extends StatefulWidget {
 class _BottomSheet_State extends State<BottomSheet_> {
   final GlobalKey _childKey = GlobalKey(debugLabel: 'BottomSheet child');
 
-  VerticalDragGestureRecognizer? _verticalDragGestureRecognizer;
+  _VerticalDragGestureRecognizer? _verticalDragGestureRecognizer;
 
-  VerticalDragGestureRecognizer get verticalDragGestureRecognizer =>
+  _VerticalDragGestureRecognizer get verticalDragGestureRecognizer =>
       _verticalDragGestureRecognizer ??=
-          VerticalDragGestureRecognizer(debugOwner: this)
+          _VerticalDragGestureRecognizer(
+              debugOwner: this,
+              dragHeight: widget.dragHeight,
+            )
             ..onStart = handleDragStart
             ..onUpdate = handleDragUpdate
             ..onEnd = handleDragEnd
@@ -149,5 +164,23 @@ class _BottomSheet_State extends State<BottomSheet_> {
     }
 
     return bottomSheet;
+  }
+}
+
+/// A [VerticalDragGestureRecognizer] that only accepts pointers going down
+/// within [dragHeight] from the top of the sheet, so that the top drag bar
+/// keeps owning horizontal gestures.
+class _VerticalDragGestureRecognizer extends VerticalDragGestureRecognizer {
+  _VerticalDragGestureRecognizer({
+    super.debugOwner,
+    this.dragHeight = kBottomSheetDragHeight,
+  });
+
+  final double dragHeight;
+
+  @override
+  bool isPointerAllowed(PointerEvent event) {
+    return event.localPosition.dy < dragHeight &&
+        super.isPointerAllowed(event as PointerDownEvent);
   }
 }

@@ -72,6 +72,7 @@ class NetworkImgLayer extends StatelessWidget {
     }
 
     return CachedNetworkImage(
+      useOldImageOnUrlChange: true,
       imageUrl: (isEmote)
           ? ImageUtils.thumbnailUrl(src, quality)
           : ImageUtils.thumbnailUrlWithSize(
