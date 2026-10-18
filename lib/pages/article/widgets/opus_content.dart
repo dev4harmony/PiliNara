@@ -14,6 +14,7 @@ import 'package:PiliPlus/models/common/image_preview_type.dart';
 import 'package:PiliPlus/models/dynamics/article_content_model.dart'
     show ArticleContentModel, Rich, Style, Word, Node;
 import 'package:PiliPlus/models/dynamics/result.dart';
+import 'package:PiliPlus/pages/article/widgets/sliver_list_ext.dart';
 import 'package:PiliPlus/pages/dynamics/widgets/vote.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
@@ -36,18 +37,23 @@ class OpusContent extends StatelessWidget {
   final List<ArticleContentModel> opus;
   final ValueGetter<List<SourceModel>> images;
   final double maxWidth;
+  final String opusId;
+  final bool reverse;
 
   const OpusContent({
     super.key,
     required this.opus,
     required this.images,
     required this.maxWidth,
+    required this.opusId,
+    required this.reverse,
   });
 
   static InlineSpan _node2Widget({
     required Node item,
     required ColorScheme colorScheme,
     bool isQuote = false,
+    required String opusId,
     required ValueGetter<double> surfaceLuminance,
   }) {
     switch (item.type) {
@@ -71,6 +77,31 @@ class OpusContent extends StatelessWidget {
                   type: .emote,
                 ),
               ),
+            );
+          case 'RICH_TEXT_NODE_TYPE_LOTTERY':
+            return TextSpan(
+              children: [
+                WidgetSpan(
+                  alignment: .middle,
+                  child: Icon(
+                    Icons.redeem_rounded,
+                    size: 16,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                TextSpan(
+                  text: '${rich.origText} ',
+                  style: TextStyle(color: colorScheme.primary),
+                  recognizer: NoDeadlineTapGestureRecognizer()
+                    ..onTap = () => Get.toNamed(
+                      '/webview',
+                      parameters: {
+                        'url':
+                            'https://www.bilibili.com/h5/lottery/result?business_id=$opusId',
+                      },
+                    ),
+                ),
+              ],
             );
           default:
             return TextSpan(
@@ -179,7 +210,8 @@ class OpusContent extends StatelessWidget {
 
     late final highlight = Highlight()..registerLanguages(builtinAllLanguages);
 
-    return SliverList.separated(
+    return SliverListExt.separated(
+      reverse: reverse,
       itemCount: opus.length,
       itemBuilder: (context, index) {
         final element = opus[index];
@@ -194,6 +226,7 @@ class OpusContent extends StatelessWidget {
                       ?.map(
                         (item) => _node2Widget(
                           item: item,
+                          opusId: opusId,
                           colorScheme: colorScheme,
                           surfaceLuminance: getSurfaceLuminance,
                         ),
@@ -299,6 +332,7 @@ class OpusContent extends StatelessWidget {
                                 ?.map(
                                   (item) => _node2Widget(
                                     item: item,
+                                    opusId: opusId,
                                     colorScheme: colorScheme,
                                     surfaceLuminance: getSurfaceLuminance,
                                   ),
@@ -838,6 +872,7 @@ class OpusContent extends StatelessWidget {
                       .map(
                         (e) => _node2Widget(
                           item: e,
+                          opusId: opusId,
                           colorScheme: colorScheme,
                           surfaceLuminance: getSurfaceLuminance,
                         ),

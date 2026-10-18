@@ -49,9 +49,6 @@ class BiliDownloadEntryInfo with MultiSelectData {
   final String? seasonId; // pgc
   final SourceInfo? source;
   EpInfo? ep;
-  final String? autoFolderTitle;
-  final String? autoFolderSourceKey;
-  final int? autoFolderIndex;
   List<SegmentItemModel>? segments;
   SeasonInfo? seasonInfo;
 
@@ -86,7 +83,12 @@ class BiliDownloadEntryInfo with MultiSelectData {
         entries: [this],
       );
 
-  Widget moreBtn(ColorScheme colorScheme) => SizedBox(
+  /// 条目菜单；[extraItemsBuilder] 让分组卡片追加自己的动作（导出整组、加入
+  /// 文件夹），模型本身不认识文件夹与导出流程。
+  Widget moreBtn(
+    ColorScheme colorScheme, {
+    List<PopupMenuEntry<void>> Function(BuildContext context)? extraItemsBuilder,
+  }) => SizedBox(
     width: 29,
     height: 29,
     child: Builder(
@@ -166,6 +168,8 @@ class BiliDownloadEntryInfo with MultiSelectData {
                   style: TextStyle(fontSize: 13),
                 ),
               ),
+              // 分组卡片追加自己的动作（导出整组、加入文件夹等）
+              ...?extraItemsBuilder?.call(context),
             ],
           );
         },
@@ -229,9 +233,6 @@ class BiliDownloadEntryInfo with MultiSelectData {
     this.seasonId,
     this.source,
     this.ep,
-    this.autoFolderTitle,
-    this.autoFolderSourceKey,
-    this.autoFolderIndex,
     this.segments,
     this.seasonInfo,
   });
@@ -272,9 +273,6 @@ class BiliDownloadEntryInfo with MultiSelectData {
         ep: json['ep'] != null
             ? EpInfo.fromJson(json['ep'] as Map<String, dynamic>)
             : null,
-        autoFolderTitle: json['auto_folder_title'] as String?,
-        autoFolderSourceKey: json['auto_folder_source_key'] as String?,
-        autoFolderIndex: json['auto_folder_index'] as int?,
         segments: SegmentItemModel.fromCache(json['segments']),
         seasonInfo: json['season_info'] != null
             ? SeasonInfo.fromJson(json['season_info'] as Map<String, dynamic>)
@@ -309,9 +307,6 @@ class BiliDownloadEntryInfo with MultiSelectData {
     'season_id': ?seasonId,
     'source': ?source?.toJson(),
     'ep': ?ep?.toJson(),
-    'auto_folder_title': ?autoFolderTitle,
-    'auto_folder_source_key': ?autoFolderSourceKey,
-    'auto_folder_index': ?autoFolderIndex,
     'segments': ?segments?.map((e) => e.toJson()).toList(),
     'season_info': ?seasonInfo?.toJson(),
   };

@@ -144,14 +144,13 @@ class LiveRoomController extends GetxController {
   late final RxInt pageIndex = 0.obs;
   PageController? pageController;
 
-  // 同 cacheVideoQa：由 queryLiveUrl 按当前链路首次赋值，不再按平台预置
-  int? currentQn;
-  StreamSubscription<bool>? _networkScopeSub;
   // queryLiveUrl 无重入保护，链路翻转与用户切线路可能撞在一起
   bool _queryingLiveUrl = false;
-  final currentQnDesc = ''.obs;
   final RxBool isPortrait = false.obs;
-  late List<({int code, String desc})> acceptQnList = [];
+  late List<LiveQuality> acceptQnList = [];
+  final Rxn<LiveQuality> currentQn = Rxn<LiveQuality>(
+    PlatformUtils.isMobile ? null : .fromCode(Pref.liveQuality),
+  );
 
   late final bool isLogin;
   late final int mid;
@@ -351,12 +350,14 @@ class LiveRoomController extends GetxController {
     required bool autoplay,
     required bool autoFullScreenFlag,
   }) async {
-    currentQn ??= await ConnectivityUtils.isWiFi
-        ? Pref.liveQuality
-        : Pref.liveQualityCellular;
+    currentQn.value ??= .fromCode(
+      await ConnectivityUtils.isWiFi
+          ? Pref.liveQuality
+          : Pref.liveQualityCellular,
+    );
     final res = await LiveHttp.liveRoomInfo(
       roomId: roomId,
-      qn: currentQn,
+      qn: currentQn.value!.code,
       onlyAudio: plPlayerController.onlyPlayAudio.value,
     );
     if (res case Success(:final response)) {
@@ -485,16 +486,9 @@ class LiveRoomController extends GetxController {
         .getOrFirst(formatIndex)
         .codec
         .getOrFirst(codecIndex);
+    acceptQnList = item.acceptQn;
     // 以服务端返回的码率为准
-    currentQn = item.currentQn;
-    acceptQnList = item.acceptQn.map((e) {
-      return (
-        code: e,
-        desc: LiveQuality.fromCode(e)?.desc ?? e.toString(),
-      );
-    }).toList();
-    currentQnDesc.value =
-        LiveQuality.fromCode(currentQn)?.desc ?? currentQn.toString();
+    currentQn.value = item.currentQn;
     videoUrl = VideoUtils.getLiveCdnUrl(item, index: liveUrlIndex);
     return playerInit(
       autoplay: autoplay,
@@ -545,7 +539,7 @@ class LiveRoomController extends GetxController {
             if (codecName.contains('av1')) {
               score -= 30;
             }
-            if (codecItem.currentQn == currentQn) {
+            if (codecItem.currentQn == currentQn.value) {
               score += 10;
             }
             if (urlInfo.$1 == liveUrlIndex) {
@@ -769,8 +763,6 @@ class LiveRoomController extends GetxController {
   @override
   void onClose() {
     plPlayerController.onNeedsPlayerInit = null;
-    _networkScopeSub?.cancel();
-    _networkScopeSub = null;
     if (identical(plPlayerController.sourceOwner, this)) {
       plPlayerController.sourceOwner = null;
     }
@@ -800,13 +792,11 @@ class LiveRoomController extends GetxController {
   }
 
   // 修改画质
-  Future<void>? changeQn(int qn) {
-    if (currentQn == qn) {
+  Future<void>? changeQn(LiveQuality qn) {
+    if (currentQn.value == qn) {
       return null;
     }
-    currentQn = qn;
-    currentQnDesc.value =
-        LiveQuality.fromCode(currentQn)?.desc ?? currentQn.toString();
+    currentQn.value = qn;
     return queryLiveUrl();
   }
 

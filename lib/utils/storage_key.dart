@@ -359,8 +359,11 @@ abstract final class LocalCacheKey {
       recommendBlockedMids = 'recommendBlockedMids',
       replyBlockedMids = 'replyBlockedMids',
       danmakuFilterRules = 'danmakuFilterRules',
-      downloadCollections = 'downloadCollections',
       lastLocalPlayed = 'lastLocalPlayed',
+      downloadFolders = 'downloadFolders',
+      /// 2.1.6 及更早的 fork 用它同时存自动归组，现只在首次启动时读一次，
+      /// 取回用户手工建的文件夹（见 DownloadFolderService 的导入逻辑）。
+      legacyDownloadCollections = 'downloadCollections',
       mixinKey = 'mixinKey',
       timeStamp = 'timeStamp',
       remarkMids = 'remarkMids',
