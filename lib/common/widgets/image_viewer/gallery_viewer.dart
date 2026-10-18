@@ -383,7 +383,7 @@ class _GalleryViewerState extends State<GalleryViewer>
   void _playIfNeeded(SourceModel item) {
     if (item.sourceType == .livePhoto) {
       if (_player != null) {
-        _player!.open(Media(item.liveUrl!));
+        _player!.open(Media(item.liveUrl!.http2https));
       } else if (!_hasInit) {
         _hasInit = true;
         _initPlayer();
@@ -510,7 +510,9 @@ class _GalleryViewerState extends State<GalleryViewer>
                       _horizontalDragGestureRecognizer,
                   onChangePage: _onChangePage,
                   child: FittedBox(
-                    child: Video(
+                    // SimpleVideo 不带控件层，滑页/缩放/双击手势都能透传到
+                    // Viewer；它也会在第一帧尺寸就绪时自行重建。
+                    child: SimpleVideo(
                       controller: _videoController!,
                       fill: Colors.transparent,
                     ),

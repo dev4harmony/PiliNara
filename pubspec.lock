@@ -1362,7 +1362,7 @@ packages:
     description:
       path: media_kit_video
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: "5afd7cfb920024bcd468a26c53da29b8b5fac292"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "2.0.1"
