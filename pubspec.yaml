@@ -290,8 +290,11 @@ dependencies:
       url: https://github.com/bggRGjQaUbCoE/super_sliver_list.git
       ref: mod
   dlna_dart: ^0.1.1
-  battery_plus: ^7.0.0
-  battery_plus_ohos: ^0.0.3
+  battery_plus:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
+      path: packages/battery_plus/battery_plus
+      ref: br_battery_plus-v7.0.0_ohos
   material_new_shapes: ^1.0.0
 
   vector_math: any

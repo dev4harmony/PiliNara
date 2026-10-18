@@ -151,19 +151,12 @@ packages:
   battery_plus:
     dependency: "direct main"
     description:
-      name: battery_plus
-      sha256: "49f75523cd5461a44202d67c5e1c73b790f16a822475b6f116d50714cd64a0ab"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "7.1.2"
-  battery_plus_ohos:
-    dependency: "direct main"
-    description:
-      name: battery_plus_ohos
-      sha256: "94fcf4d39509c72944c86c2285fafa88b38be168e315535623d67cf84245d74e"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "0.0.3"
+      path: "packages/battery_plus/battery_plus"
+      ref: "br_battery_plus-v7.0.0_ohos"
+      resolved-ref: b8647bf46219d7d0a5235766aea0974d999f130f
+      url: "https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git"
+    source: git
+    version: "7.0.0"
   battery_plus_platform_interface:
     dependency: transitive
     description:
@@ -1281,7 +1274,7 @@ packages:
     description:
       path: media_kit
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: "804ba1b5aa2f4c25f9289cca5fabb967ed14e931"
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.3"
