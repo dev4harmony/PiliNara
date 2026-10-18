@@ -69,7 +69,7 @@ import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart'
     show ValueNotifier, clampDouble, kDebugMode;
 import 'package:flutter/services.dart'
-    show DeviceOrientation, HapticFeedback, KeyDownEvent;
+    show DeviceOrientation, HapticFeedback;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
@@ -449,7 +449,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (!autoEnter && OS.isHarmony && HarmonyChannel.isMiniWindowLandscape) {
       return Future.value(PiPStatus.unavailable);
     }
-    if (videoPlayerController case NativePlayer(:final state)) {
+    if (videoPlayerController != null) {
+      final state = videoPlayerController!.state;
       if (Platform.isIOS) {
         if (videoController?.id.value case final textureId?) {
           IOSPipHelper.enter(
@@ -459,6 +460,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             autoEnter: autoEnter,
             state: _iosPipState(state),
           );
+          return Future.value(PiPStatus.enabled);
         }
         return Future.value(PiPStatus.unavailable);
       }
