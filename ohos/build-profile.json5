@@ -15,22 +15,25 @@
           "nativeCompiler": "BiSheng",
           "preloadSystemSo": true,
           "arkOptions": {
-            "autoLazyImport": true,
+            "autoLazyImport": true
           }
         }
-      },
+      }
     ],
     buildModeSet: [
       {
-        name: "debug",
+        name: "debug"
       },
       {
-        name: "profile",
+        name: "profile"
       },
       {
-        name: "release",
-      },
+        name: "release"
+      }
     ],
+    "signingConfigs": [
+
+    ]
   },
   modules: [
     {
