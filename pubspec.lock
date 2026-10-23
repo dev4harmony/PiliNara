@@ -565,8 +565,15 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "7.0.1"
-  file_picker_ohos:
+  file_picker:
     dependency: "direct main"
+    description:
+      path: "packages/file_picker"
+      relative: true
+    source: path
+    version: "10.3.8"
+  file_picker_ohos:
+    dependency: transitive
     description:
       path: "."
       ref: "br_v10.3.8_ohos"
