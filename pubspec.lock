@@ -1097,10 +1097,10 @@ packages:
     dependency: "direct main"
     description:
       name: intl
-      sha256: "3df61194eb431efc39c4ceba583b95633a403f46c9fd341e550ce0bfa50e9aa5"
+      sha256: "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.20.2"
+    version: "0.20.3"
   io:
     dependency: transitive
     description:
@@ -1233,10 +1233,10 @@ packages:
     dependency: transitive
     description:
       name: matcher
-      sha256: dc0b7dc7651697ea4ff3e69ef44b0407ea32c487a39fff6a4004fa585e901861
+      sha256: "31bd099b47c10cd1aeb55146a2d46ce0277630ecef3f7dae54ad7873f36696cd"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.12.19"
+    version: "0.12.20"
   material_color_utilities:
     dependency: "direct main"
     description:
@@ -1274,7 +1274,7 @@ packages:
     description:
       path: media_kit
       ref: support-pilinara
-      resolved-ref: "804ba1b5aa2f4c25f9289cca5fabb967ed14e931"
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.3"
@@ -1292,7 +1292,7 @@ packages:
     description:
       path: "libs/ios/media_kit_libs_ios_video"
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1301,7 +1301,7 @@ packages:
     description:
       path: "libs/linux/media_kit_libs_linux"
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.1"
@@ -1310,7 +1310,7 @@ packages:
     description:
       path: "libs/macos/media_kit_libs_macos_video"
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1319,7 +1319,7 @@ packages:
     description:
       path: "libs/ohos/media_kit_libs_ohos"
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.0"
@@ -1328,7 +1328,7 @@ packages:
     description:
       path: "libs/universal/media_kit_libs_video"
       ref: support-pilinara
-      resolved-ref: de6d52790ec694810ae9174594e2d1d05c5ca4e8
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.7"
@@ -1355,7 +1355,7 @@ packages:
     description:
       path: media_kit_video
       ref: support-pilinara
-      resolved-ref: "5afd7cfb920024bcd468a26c53da29b8b5fac292"
+      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "2.0.1"
@@ -1388,7 +1388,7 @@ packages:
     description:
       path: "."
       ref: "br_2.1.0_ohos"
-      resolved-ref: b395241e7f3a24da33392b2f2be21f50566cdc22
+      resolved-ref: "04f2309e43cf9eb2504991d762106e010ea43c74"
       url: "https://gitcode.com/hellozeronick/fluttertpc_native_device_orientation.git"
     source: git
     version: "2.1.0"
@@ -2026,10 +2026,10 @@ packages:
     dependency: transitive
     description:
       name: test_api
-      sha256: "949a932224383300f01be9221c39180316445ecb8e7547f70a41a35bf421fb9e"
+      sha256: "2a122cbe059f8b610d3a5415f42e255b6c17b1f21eee1d960f31080237fb4f11"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.7.11"
+    version: "0.7.12"
   tray_manager:
     dependency: "direct main"
     description:
@@ -2196,10 +2196,10 @@ packages:
     dependency: "direct main"
     description:
       name: vector_math
-      sha256: d530bd74fea330e6e364cda7a85019c434070188383e1cd8d9777ee586914c5b
+      sha256: "92b9910f66ed1057fd4da7b040ae7c74cafacf885bdc81be496928d5049b032d"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "2.2.0"
+    version: "2.4.3"
   video_player:
     dependency: "direct overridden"
     description:
