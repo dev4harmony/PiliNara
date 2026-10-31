@@ -845,8 +845,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     _cancelAutoExitFs();
     _autoExitFsTimer = Timer(_autoExitFsDelay, () {
       _autoExitFsTimer = null;
-      if ((OS.isHarmony && HarmonyChannel.isWindowMode) ||
-          _orientation != orientation ||
+      if (_orientation != orientation ||
           !isFullScreen.value ||
           isManualFS ||
           horizontalScreen ||
@@ -874,10 +873,6 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     final deviceOrientation = param.orientation;
     if (deviceOrientation == null) return;
     _orientation = deviceOrientation;
-    if (OS.isHarmony && HarmonyChannel.isWindowMode) {
-      _cancelAutoExitFs();
-      return;
-    }
     if (Platform.isIOS && !visible) return;
     final isFullScreen = this.isFullScreen.value;
     if (checkIsAutoRotate &&
