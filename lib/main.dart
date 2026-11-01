@@ -21,8 +21,8 @@ import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/services/route_stack_observer.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
-import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/calc_window_position.dart';
+import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/core_palettes_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/font_utils.dart';
@@ -83,8 +83,12 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (OS.isHarmony) {
-    downloadPath =
-        'storage/Users/currentUser/Download/com.dev4harmony.pilinara';
+    // 主应用与分身应用共用包名，但分身应用不允许访问下载目录：只有主应用能
+    // 落到系统的 Download/<bundle>，分身仍走应用私有目录。
+    await HarmonyChannel.loadAppCloneIndex();
+    downloadPath = HarmonyChannel.isAppClone
+        ? defDownloadPath
+        : 'storage/Users/currentUser/Download/com.dev4harmony.pilinara';
   } else if (Platform.isAndroid) {
     final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
     downloadPath = externalStorageDirPath != null
