@@ -107,7 +107,6 @@ class PLVideoPlayer extends StatefulWidget {
     this.showViewPoints,
     this.isPipMode = false,
     this.isInAppPip = false,
-    this.topInset,
     this.fill = Colors.black,
     this.alignment = Alignment.center,
     super.key,
@@ -136,10 +135,6 @@ class PLVideoPlayer extends StatefulWidget {
   /// 应用内小窗（我们独有的浮窗，非系统 PiP）。
   /// 窗口过小时不渲染字幕，避免（尤其是双语）字幕挤占画面。
   final bool isInAppPip;
-
-  /// 竖屏全屏时顶部控件的固定避让高度（进全屏前捕获的状态栏/挖孔高度），
-  /// null 表示不避让
-  final double? topInset;
 
   final Color fill;
   final Alignment alignment;
@@ -1796,11 +1791,10 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           Positioned.fill(
             top: _kDanmakuTopInset,
             child: TopInsetPadding(
-              inset: portraitFullscreenTopInset(
+              inset: harmonyDecorTopInset(
+                context,
                 isFullScreen: isFullScreen,
-                isPortrait: maxHeight >= maxWidth,
                 removeSafeArea: plPlayerController.removeSafeArea,
-                topInset: widget.topInset,
               ),
               child: danmaku,
             ),
@@ -2177,7 +2171,6 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                     controller: _animationController,
                     isFullScreen: isFullScreen,
                     removeSafeArea: plPlayerController.removeSafeArea,
-                    topInset: widget.topInset,
                     child: plPlayerController.isDesktopPip
                         ? GestureDetector(
                             behavior: HitTestBehavior.translucent,

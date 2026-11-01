@@ -5,6 +5,7 @@ import 'dart:math' show max, min;
 import 'dart:ui' as ui;
 
 import 'package:PiliPlus/common/assets.dart';
+import 'package:PiliPlus/harmony/window/window_facts.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/http/browser_ua.dart';
 import 'package:PiliPlus/http/constants.dart';
@@ -845,7 +846,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     _cancelAutoExitFs();
     _autoExitFsTimer = Timer(_autoExitFsDelay, () {
       _autoExitFsTimer = null;
-      if ((OS.isHarmony && HarmonyChannel.isWindowMode) ||
+      if ((OS.isHarmony && WindowFacts.isWindowMode) ||
           _orientation != orientation ||
           !isFullScreen.value ||
           isManualFS ||
@@ -874,7 +875,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     final deviceOrientation = param.orientation;
     if (deviceOrientation == null) return;
     _orientation = deviceOrientation;
-    if (OS.isHarmony && HarmonyChannel.isWindowMode) {
+    if (OS.isHarmony && WindowFacts.isWindowMode) {
       _cancelAutoExitFs();
       return;
     }
@@ -2675,7 +2676,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             isVertical: isVertical,
             orientation: orientation,
           );
-          if (OS.isHarmony && !HarmonyChannel.isWindowMode) {
+          if (OS.isHarmony && !WindowFacts.isWindowMode) {
             // 手动进全屏的目标方向：横屏时等视口真正变横屏再置全屏布局，
             // 避免全屏先在竖屏/中间尺寸渲染，导致比例错误和动画跳变。
             final targetLandscape =
@@ -2710,7 +2711,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             onTimeout: () {},
           );
           // 退出全屏时，延迟等待方向旋转后改变组件
-          if (OS.isHarmony && !HarmonyChannel.isWindowMode) {
+          if (OS.isHarmony && !WindowFacts.isWindowMode) {
             await Future<void>.delayed(const Duration(milliseconds: 32));
           }
         } else {

@@ -16,7 +16,6 @@ import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/keep_alive_wrapper.dart';
 import 'package:PiliPlus/common/widgets/route_aware_mixin.dart';
 import 'package:PiliPlus/common/widgets/scroll_physics.dart';
-import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/models/common/image_type.dart';
 import 'package:PiliPlus/models/common/live/live_contribution_rank_type.dart';
 import 'package:PiliPlus/models_new/live/live_room_info_h5/data.dart';
@@ -159,9 +158,6 @@ class _LiveRoomPageState extends State<LiveRoomPage>
   void initState() {
     super.initState();
     addObserverMobile(this);
-    // 页面顶部是深色播放器：自由多窗的装饰栏按钮切浅色风格，否则浅色
-    // 模式下深色按钮不可见
-    HarmonyChannel.holdDecorDark(this);
     final args = Get.arguments;
 
     // 解析当前请求进入的房间号
@@ -263,7 +259,6 @@ class _LiveRoomPageState extends State<LiveRoomPage>
       hideSystemBar();
     }
     addObserverMobile(this);
-    HarmonyChannel.holdDecorDark(this);
 
     // 如果返回当前页面时应用内小窗正在运行，且房间号匹配，说明是从正在小窗播放的页面返回
     if (LivePipOverlayService.isInPipMode) {
@@ -359,7 +354,6 @@ class _LiveRoomPageState extends State<LiveRoomPage>
   @override
   void didPushNext() {
     WidgetsBinding.instance.removeObserver(this);
-    HarmonyChannel.releaseDecorDark(this);
     plPlayerController.removeStatusLister(playerListener);
     // 未开播时内容就是弹幕流本身，不能随播放状态关闭
     if (_liveRoomController.isUnstartedRoom.value) {
@@ -408,7 +402,6 @@ class _LiveRoomPageState extends State<LiveRoomPage>
       videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
     }
     removeObserverMobile(this);
-    HarmonyChannel.releaseDecorDark(this);
     if ((Platform.isAndroid || OS.isHarmony) &&
         !plPlayerController.setSystemBrightness) {
       ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
@@ -531,16 +524,6 @@ class _LiveRoomPageState extends State<LiveRoomPage>
             fill: fill,
             alignment: alignment,
             plPlayerController: plPlayerController,
-            // 不在播放器内部避让：本页的 Scaffold 已经让出过一次。
-            // Scaffold 给 AppBar 那一格的高度是
-            // `appBar.preferredSize + (primary ? padding.top : 0)`
-            // （见 SDK scaffold.dart 的 _appBarMaxHeight），全屏时 AppBar 虽然
-            // toolbarHeight 为 0、自身 primary 也关了，但 Scaffold 的 primary
-            // 仍为 true，这一格照样占 padding.top，正文（播放器）整体下移；
-            // _buildPP/_buildPH 里 videoHeight 减掉的正是这一段。隐藏状态栏后
-            // padding.top 即挖孔高度，播放器已经整个在挖孔之下，再传 topInset
-            // 就是同一个值避让两次。
-            topInset: null,
             headerControl: LiveHeaderControl(
               key: _liveRoomController.headerKey,
               title: roomInfoH5?.roomInfo?.title,
