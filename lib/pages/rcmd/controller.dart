@@ -119,6 +119,6 @@ class RcmdController extends CommonListController {
     page = 0;
     _appPage = 0; // 重置 App 端页码
     isEnd = false;
-    return queryData();
+    return refreshQueryData();
   }
 }
