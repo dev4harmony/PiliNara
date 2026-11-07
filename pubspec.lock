@@ -1281,7 +1281,7 @@ packages:
     description:
       path: media_kit
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.3"
@@ -1299,7 +1299,7 @@ packages:
     description:
       path: "libs/ios/media_kit_libs_ios_video"
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1308,7 +1308,7 @@ packages:
     description:
       path: "libs/linux/media_kit_libs_linux"
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.2.1"
@@ -1317,7 +1317,7 @@ packages:
     description:
       path: "libs/macos/media_kit_libs_macos_video"
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1326,7 +1326,7 @@ packages:
     description:
       path: "libs/ohos/media_kit_libs_ohos"
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.0"
@@ -1335,7 +1335,7 @@ packages:
     description:
       path: "libs/universal/media_kit_libs_video"
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "1.0.7"
@@ -1362,7 +1362,7 @@ packages:
     description:
       path: media_kit_video
       ref: support-pilinara
-      resolved-ref: f3caf95da0bc6ecb346090ca657499c81673ef1f
+      resolved-ref: e325b2dbb533abebcff5e83ae461d6060d1ceb42
       url: "https://github.com/HelloZeroNick/media-kit.git"
     source: git
     version: "2.0.1"
@@ -1395,7 +1395,7 @@ packages:
     description:
       path: "."
       ref: "br_2.1.0_ohos"
-      resolved-ref: "04f2309e43cf9eb2504991d762106e010ea43c74"
+      resolved-ref: "1c021e5440ac354e8591cc08ee555b4293070560"
       url: "https://gitcode.com/hellozeronick/fluttertpc_native_device_orientation.git"
     source: git
     version: "2.1.0"
