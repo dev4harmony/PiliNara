@@ -1,33 +1,18 @@
 import 'package:PiliPlus/common/style.dart';
-import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoThemeData;
 import 'package:flutter/foundation.dart' show PlatformDispatcher;
-import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:os_type/os_type.dart';
 
 abstract final class ThemeUtils {
   static late ThemeData lightTheme;
 
   static late ThemeData darkTheme;
 
-  static final Rx<ThemeMode> _themeMode = Pref.themeMode.obs;
+  static late ThemeMode themeMode;
 
-  /// 手动将当前主题模式通知给原生层（应用内切换主题模式的开关处调用）
-  static void syncColorModeToNative() {
-    if (!OS.isHarmony) return;
-    HarmonyChannel.setSystemColorMode(themeModeMap[_themeMode.value] ?? '');
-  }
-
-  static ThemeMode get themeMode => _themeMode.value;
-
-  static set themeMode(ThemeMode value) => _themeMode.value = value;
-
-  static Rx<ThemeMode> get themeModeRx => _themeMode;
-
-  static Map<ThemeMode, String> themeModeMap = {
+  static const Map<ThemeMode, String> themeModeMap = {
     ThemeMode.light: "light",
     ThemeMode.dark: "dark",
     ThemeMode.system: "system",
@@ -69,13 +54,13 @@ abstract final class ThemeUtils {
     // null，回落到鸿蒙一贯的 HarmonyOS Sans；在本仓库的安卓 / Windows / Linux
     // 构建上则由用户的选择覆盖。
     late final fontFamily = Pref.appFont ?? "HarmonyOS Sans";
-    late final textStyle = TextStyle(
+    final textStyle = TextStyle(
       fontWeight: fontWeight,
       fontFamily: fontFamily,
     );
-    ThemeData theme = ThemeData(
-      colorScheme: colorScheme,
+    final theme = ThemeData(
       useMaterial3: true,
+      colorScheme: colorScheme,
       fontFamily: fontFamily,
       textTheme: TextTheme(
         displayLarge: textStyle,
