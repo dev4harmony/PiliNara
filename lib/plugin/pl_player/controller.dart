@@ -2670,7 +2670,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     this.isManualFS = isManualFS;
     try {
       if (status) {
-        if (PlatformUtils.isMobile) {
+        if (PlatformUtils.isMobile && !WindowFacts.isFreeWindowMode) {
           hideSystemBar();
           await changeOrientation(
             isVertical: isVertical,
@@ -2696,7 +2696,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
         }
       } else {
-        if (PlatformUtils.isMobile) {
+        if (PlatformUtils.isMobile && !WindowFacts.isFreeWindowMode) {
           if (!removeSafeArea) {
             showSystemBar();
           }
