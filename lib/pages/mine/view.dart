@@ -24,10 +24,10 @@ import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
-import 'package:material_ui/material_ui.dart' hide ListTile;
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
+import 'package:material_ui/material_ui.dart' hide ListTile;
 
 class MinePage extends StatefulWidget {
   const MinePage({super.key, this.showBackBtn = false});
@@ -79,40 +79,41 @@ class _MediaPageState extends CommonPageState<MinePage>
     final secondary = theme.colorScheme.secondary;
     return SafeArea(
       // 避让安全区
+      bottom: false,
       child: Column(
-        children: [
-          Padding(
-            padding: const .symmetric(vertical: 10),
-            child: _buildHeaderActions,
-          ),
-          Expanded(
-            child: Material(
-              type: .transparency,
-              child: refreshIndicator(
-                key: controller.refreshKey,
-                onRefresh: controller.onRefresh,
-                child: onBuild(
-                  ListView(
-                    controller: controller.scrollController,
-                    padding: const .only(bottom: 150),
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    children: [
-                      _buildUserInfo(theme, secondary),
-                      _buildActions(secondary),
-                      for (final tab in controller.mineTabs)
-                        switch (tab) {
-                          .favorite => Obx(_buildFav),
-                          .history => Obx(_buildHistory),
-                          .later => Obx(_buildLater),
-                          .sub => Obx(_buildSub),
-                        },
-                    ],
-                  ),
+      children: [
+        Padding(
+          padding: const .symmetric(vertical: 10),
+          child: _buildHeaderActions,
+        ),
+        Expanded(
+          child: Material(
+            type: .transparency,
+            child: refreshIndicator(
+              key: controller.refreshKey,
+              onRefresh: controller.onRefresh,
+              child: onBuild(
+                ListView(
+                  controller: controller.scrollController,
+                  padding: const .only(bottom: 150),
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  children: [
+                    _buildUserInfo(theme, secondary),
+                    _buildActions(secondary),
+                    for (final tab in controller.mineTabs)
+                      switch (tab) {
+                        .favorite => Obx(_buildFav),
+                        .history => Obx(_buildHistory),
+                        .later => Obx(_buildLater),
+                        .sub => Obx(_buildSub),
+                      },
+                  ],
                 ),
               ),
             ),
           ),
-        ],
+        ),
+      ],
       ),
     );
   }
@@ -369,7 +370,6 @@ class _MediaPageState extends CommonPageState<MinePage>
                           value: hasLevel
                               ? levelInfo.currentExp! / levelInfo.nextExp!
                               : 0,
-                          trackGap: hasLevel ? null : 0,
                           backgroundColor: theme.colorScheme.outline.withValues(
                             alpha: 0.4,
                           ),
