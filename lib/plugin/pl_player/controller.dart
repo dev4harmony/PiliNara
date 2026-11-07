@@ -1,12 +1,12 @@
-import 'dart:async' show Completer, StreamSubscription, Timer, unawaited;
+import 'dart:async' show Completer, StreamSubscription, Timer, TimeoutException, unawaited;
 import 'dart:convert' show ascii;
 import 'dart:io' show Platform;
 import 'dart:math' show max, min;
 import 'dart:ui' as ui;
 
 import 'package:PiliPlus/common/assets.dart';
-import 'package:PiliPlus/harmony_adapt/window/window_facts.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
+import 'package:PiliPlus/harmony_adapt/window/window_facts.dart';
 import 'package:PiliPlus/http/browser_ua.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/loading_state.dart';
@@ -3362,7 +3362,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (pending != null) {
       try {
         await pending.timeout(const Duration(seconds: 3));
-      } catch (_) {}
+      } on TimeoutException {
+        debugPrint(
+          '[PlPlayer] dispose: pending task still running after 3s, forcing teardown',
+        );
+      }
     }
     await _disposePlayerSafely(_videoPlayerController);
     _videoPlayerController = null;
