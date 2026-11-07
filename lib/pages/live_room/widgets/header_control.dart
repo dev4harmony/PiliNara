@@ -183,7 +183,7 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
               height: 30,
               tooltip: '画中画',
               onTap: () async {
-                if (PlatformUtils.isDesktop) {
+                if (PlatformUtils.isDesktop && !OS.isHarmony) {
                   plPlayerController.toggleDesktopPip();
                   return;
                 }
