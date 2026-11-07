@@ -178,3 +178,5 @@ ohos/.codegenie
 # 合并期临时产物（分析 dump / 探针脚本，不入库；见 AGENT.md §9）
 tool_merge/analyze_*.txt
 tool_merge/_*
+ohos/.cache/.tsbuildinfo
+ohos/.cache/.tsbuildinfo.linter
