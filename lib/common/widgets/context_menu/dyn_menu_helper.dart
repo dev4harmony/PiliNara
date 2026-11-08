@@ -156,7 +156,7 @@ void _showTextDialog(String text) {
           text,
           style: const TextStyle(fontSize: 15, height: 1.7),
           contextMenuBuilder: (_, state) {
-            final buttonItems = ensureExtraButtons(
+            final buttonItems = ensureSelectionMenuButtons(
               state.contextMenuButtonItems,
               selectedTextOf: () {
                 final value = state.textEditingValue;
