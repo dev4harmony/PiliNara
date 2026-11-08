@@ -5,7 +5,6 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'package:material_ui/material_ui.dart' hide PopupMenuItem;
-import 'package:material_ui/material_ui.dart' as material show PopupMenuItem;
 
 const _kDefaultPopupMenuPadding = EdgeInsets.all(8);
 const _kMd3eMenuContainerRadius = BorderRadius.all(Radius.circular(16));
