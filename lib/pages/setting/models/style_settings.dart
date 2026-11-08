@@ -6,6 +6,8 @@ import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
+import 'package:PiliPlus/common/widgets/scroll_physics.dart'
+    show kSpringDescription;
 import 'package:PiliPlus/common/widgets/stateful_builder.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/models/common/bar_hide_type.dart';
@@ -131,8 +133,8 @@ List<SettingsModel> get styleSettings => [
   ),
   const SwitchModel(
     title: '首页背景渐变',
-    subtitle: '主色从左上到右下的淡渐变背景',
-    leading: Icon(Icons.auto_awesome_outlined),
+    subtitle: '主框架背景由纯色改为渐变色',
+    leading: Icon(Icons.gradient_outlined),
     setKey: SettingBoxKey.enableGradientBg,
     defaultVal: true,
     needReboot: true,
@@ -148,7 +150,7 @@ List<SettingsModel> get styleSettings => [
     leading: const Icon(Icons.calendar_view_week_outlined),
     title: '列表宽度（dp）限制',
     getSubtitle: () =>
-        '当前: 主页${Pref.recommendCardWidth.toInt()}dp 其他${Pref.smallCardWidth.toInt()}dp，屏幕宽度:${DoubleExt(MediaQuery.widthOf(Get.context!)).toPrecision(2)}dp。宽度越小列数越多。',
+        '当前: 主页${Pref.recommendCardWidth.toInt()}dp 其他${Pref.smallCardWidth.toInt()}dp，屏幕宽度:${MediaQuery.widthOf(Get.context!).toPrecision(2)}dp。宽度越小列数越多。',
     onTap: _showCardWidthDialog,
   ),
   const SwitchModel(
@@ -478,7 +480,7 @@ void _showUiScaleDialog(
               divisions: ((maxUiScale - minUiScale) * 20).toInt(),
               label: textController.text,
               onChanged: (value) => setDialogState(() {
-                uiScale = DoubleExt(value).toPrecision(2);
+                uiScale = value.toPrecision(2);
                 textController.text = uiScale.toStringAsFixed(2);
               }),
             ),
@@ -661,7 +663,12 @@ void _showSpringDialog(BuildContext context, _) {
               final res = springDescription.map(double.parse).toList();
               Get.back();
               GStorage.setting.put(SettingBoxKey.springDescription, res);
-              SmartDialog.showToast('设置成功，重启生效');
+              kSpringDescription = SpringDescription(
+                mass: res[0],
+                stiffness: res[1],
+                damping: res[2],
+              );
+              SmartDialog.showToast('设置成功');
             } catch (e) {
               SmartDialog.showToast(e.toString());
             }
