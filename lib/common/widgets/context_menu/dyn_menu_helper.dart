@@ -36,10 +36,8 @@ Widget dynTextMenuBuilder(
       ),
     );
   _addDynFilterItem(buttonItems, state);
-  return AdaptiveTextSelectionToolbar.buttonItems(
-    buttonItems: buttonItems,
-    anchors: state.contextMenuAnchors,
-  );
+  // 鸿蒙上用原生样式的工具栏；其它平台仍是 Material 菜单。
+  return buildEditableTextSelectionMenuWithItems(state, buttonItems);
 }
 
 void _addDynFilterItem(
