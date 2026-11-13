@@ -253,7 +253,10 @@ dependencies:
   brotli: ^0.6.0
   expandable: ^5.0.1
   flex_seed_scheme: ^4.0.1
-  live_photo_maker: ^0.0.6
+  live_photo_maker:
+    git:
+      url: https://gitcode.com/hxa-flutter/live_photo_maker.git
+      ref: main
   fl_chart: ^1.0.0
   synchronized: ^3.4.0+1
   # document_file_save_plus: ^2.0.0
