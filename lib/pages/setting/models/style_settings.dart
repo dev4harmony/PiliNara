@@ -5,6 +5,7 @@ import 'package:PiliPlus/common/widgets/color_palette.dart';
 import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_physics.dart'
     show kSpringDescription;
@@ -952,6 +953,8 @@ void _onHorizontalScreenChanged(bool value) {
   } else {
     portraitUpMode();
   }
+  // 横屏锁定鸿蒙智感握姿
+  FabSideGate.landscapeAdapt = value;
 }
 
 Future<void> _showMineTabsDialog(

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:flutter/rendering.dart'
     show
         BoxParentData,
@@ -80,6 +81,11 @@ class _SimpleScaffoldState extends State<SimpleScaffold>
 
   @override
   Widget build(BuildContext context) {
+    // 判定是否为横屏状态，禁用智感握姿
+    final view = View.of(context);
+    FabSideController.instance.recheck(
+      landscape: view.physicalSize.width > view.physicalSize.height,
+    );
     return Material(
       color: widget.backgroundColor,
       child: ScaffoldLayout(
