@@ -6,7 +6,6 @@ import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/models/common/list_order.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/button/icon_button.dart';
-import 'package:PiliPlus/common/widgets/flutter/page/tabs.dart';
 import 'package:PiliPlus/common/widgets/image/image_save.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/keep_alive_wrapper.dart';
@@ -37,7 +36,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
-import 'package:material_ui/material_ui.dart' hide TabBarView;
+import 'package:material_ui/material_ui.dart';
 
 class EpisodePanel extends CommonSlidePage {
   const EpisodePanel({
@@ -261,7 +260,7 @@ class EpisodePanelState extends State<EpisodePanel>
       return const SizedBox.shrink();
     }
     if (_isMulti) {
-      return TabBarView<TabBarDragGestureRecognizer>(
+      return TabBarView(
         controller: _tabController,
         physics: tabBarScrollPhysics,
         horizontalDragGestureRecognizer: () =>
