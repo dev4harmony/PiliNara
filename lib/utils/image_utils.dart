@@ -160,7 +160,6 @@ abstract final class ImageUtils {
         await saveFileImg(
           filePath: videoPath,
           fileName: videoName,
-          type: FileType.video,
           needToast: true,
         );
       }
@@ -210,8 +209,7 @@ abstract final class ImageUtils {
         }
         await SaverGallery.saveFiles(saveList, skipIfExists: false);
       } else {
-        // 鸿蒙适配 fork 仅提供 FilePicker.platform 实例方法
-        final dst = await FilePicker.platform.getDirectoryPath();
+        final dst = await FilePicker.getDirectoryPath();
         if (dst == null) {
           SmartDialog.showToast('取消保存');
           return false;
@@ -328,8 +326,7 @@ abstract final class ImageUtils {
       }
     } else {
       SmartDialog.dismiss();
-      final savePath = await FilePicker.platform.saveFile(
-        type: FileType.image,
+      final savePath = await FilePicker.saveFile(
         fileName: fileName,
         bytes: Uint8List(0),
       );
@@ -337,7 +334,7 @@ abstract final class ImageUtils {
         SmartDialog.showToast("取消保存");
         return null;
       }
-      await File(savePath).writeAsBytes(bytes);
+      await File(savePath.toFilePath()).writeAsBytes(bytes);
       SmartDialog.showToast(' 已保存 ');
       res = SaveResult(true, null);
     }
@@ -347,7 +344,6 @@ abstract final class ImageUtils {
   static Future<void> saveFileImg({
     required String filePath,
     required String fileName,
-    FileType type = FileType.image,
     bool needToast = false,
   }) async {
     final file = File(filePath);
@@ -364,8 +360,7 @@ abstract final class ImageUtils {
         skipIfExists: false,
       );
     } else {
-      final savePath = await FilePicker.platform.saveFile(
-        type: type,
+      final savePath = await FilePicker.saveFile(
         fileName: fileName,
         bytes: Uint8List(0),
       );
@@ -373,7 +368,7 @@ abstract final class ImageUtils {
         SmartDialog.showToast("取消保存");
         return;
       }
-      await file.moveOrCopy(savePath);
+      await file.moveOrCopy(savePath.toFilePath());
       res = SaveResult(true, null);
     }
     if (needToast) {

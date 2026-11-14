@@ -8,8 +8,7 @@
 ///   把上游那段 `_initWindows()` / `_enumFontCallback()` 抄回来即可。
 /// - Linux 的 fontconfig 分支是纯 `dart:ffi`，原样保留。
 /// - **自定义字体导入**（[pickFonts] / [init] / [fontFile]）与平台无关，全部保留；
-///   只是文件选择器换成鸿蒙适配 fork（`file_picker_ohos`）的
-///   `FilePicker.platform.pickFiles()` 实例 API。
+///   文件选择器与上游一致，走静态 `FilePicker.pickFiles()`。
 ///
 /// 鸿蒙本身没有枚举系统字体的通道，[FontUtils.getFont] 在 ohos 上返回空集合——
 /// 字体设置页的系统字体列表因此为空，只剩「默认」与用户导入的自定义字体。
@@ -139,15 +138,11 @@ abstract final class FontUtils {
   @pragma('vm:notify-debugger-on-exception')
   static Future<String?> pickFonts() async {
     try {
-      // 鸿蒙适配 fork 仅提供 FilePicker.platform 实例方法（上游是静态的
-      // FilePicker.pickFiles），返回值也仍是旧版的 FilePickerResult。
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
+      final files = await FilePicker.pickFiles(
+        type: .custom,
         allowedExtensions: _kFontExts,
-        allowMultiple: true,
       );
-      final files = result?.files;
-      if (files == null || files.isEmpty) return null;
+      if (files.isEmpty) return null;
 
       String? firstFont;
       var failed = 0;

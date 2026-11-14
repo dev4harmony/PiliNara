@@ -571,16 +571,16 @@ packages:
       path: "packages/file_picker"
       relative: true
     source: path
-    version: "10.3.8"
+    version: "12.3.0"
   file_picker_ohos:
     dependency: transitive
     description:
       path: "."
-      ref: "br_v10.3.8_ohos"
-      resolved-ref: "04eec7fdbff232c4d05c3de92156e41eaed29ff5"
+      ref: "br_v12.3.0"
+      resolved-ref: "2084fe3c77c37914e47b9724de9b7570b673a03c"
       url: "https://gitcode.com/hellozeronick/fluttertpc_file_picker.git"
     source: git
-    version: "10.3.8"
+    version: "12.3.0"
   file_selector_linux:
     dependency: transitive
     description:
