@@ -71,17 +71,17 @@ List<SettingsModel> get styleSettings => [
     ),
   ],
   if (Platform.isLinux) _useSSDModel(),
-  SwitchModel(
-    title: '横屏适配',
-    // 鸿蒙上方向已交给系统，本项只决定布局形态（手机布局 / 平板横屏布局）。
-    subtitle: OS.isHarmony
-        ? '启用平板/横屏布局，方向仍由系统控制'
-        : '启用横屏布局与逻辑，平板、折叠屏等可开启；建议全屏方向设为【不改变当前方向】',
-    leading: const Icon(Icons.phonelink_outlined),
-    setKey: SettingBoxKey.horizontalScreen,
-    defaultVal: Pref.horizontalScreen,
-    onChanged: _onHorizontalScreenChanged,
-  ),
+  // 鸿蒙：横屏适配按设备形态自动判定（直板机/小折叠/外屏关闭，折叠内屏与
+  // 平板/2in1 开启），不再提供用户开关；其它平台保持原开关。
+  if (!OS.isHarmony)
+    SwitchModel(
+      title: '横屏适配',
+      subtitle: '启用横屏布局与逻辑，平板、折叠屏等可开启；建议全屏方向设为【不改变当前方向】',
+      leading: const Icon(Icons.phonelink_outlined),
+      setKey: SettingBoxKey.horizontalScreen,
+      defaultVal: Pref.horizontalScreen,
+      onChanged: _onHorizontalScreenChanged,
+    ),
   const SwitchModel(
     title: '改用侧边栏',
     subtitle: '开启后底栏与顶栏被替换，且相关设置失效',

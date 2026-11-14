@@ -1,3 +1,4 @@
+import 'package:PiliPlus/harmony_adapt/device/device_form.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
 import 'package:PiliPlus/harmony_adapt/orientation/harmony_orientation.dart';
 import 'package:PiliPlus/harmony_adapt/window/window_facts.dart';
@@ -105,12 +106,17 @@ abstract final class OrientationPolicy {
   /// 启动时（首帧前）初始化：取设备形态并应用一次。
   static Future<void> init() async {
     if (!OS.isHarmony) return;
-    HarmonyChannel.onDeviceFormChange = setPortraitForm;
+    HarmonyChannel.onDeviceFormChange = _onDeviceFormChanged;
     final form = await HarmonyChannel.getDeviceForm();
     // 原生 EntryAbility 在首帧前已按形态设过一次策略；这里拿到形态就再收口一次，
     // 拿不到（通道暂不可用）则不覆盖原生决策，等后续路由/形态事件再算。
     if (form != null) {
-      _portraitForm = form;
+      // 横屏适配自动值也在这里落到 Dart 镜像，供 Pref.horizontalScreen 读取。
+      HarmonyDeviceForm.update(
+        portraitForm: form.portraitForm,
+        horizontalLayout: form.horizontalLayout,
+      );
+      _portraitForm = form.portraitForm;
     }
     // 旋转锁定状态只影响「竖屏形态设备的横屏视频全屏」，其它形态不读，避免
     // 多一次通道往返。
@@ -126,10 +132,16 @@ abstract final class OrientationPolicy {
     }
   }
 
-  /// 原生推送：折叠/展开导致形态变化。
-  static void setPortraitForm(bool value) {
-    if (_portraitForm == value) return;
-    _portraitForm = value;
+  /// 原生推送：折叠/展开、内外屏切换。
+  ///
+  /// 横屏适配自动值由通道 handler 同步进 `HarmonyDeviceForm`；这里只处理方向
+  /// 策略依赖的竖屏形态。
+  static void _onDeviceFormChanged(
+    bool portraitForm,
+    bool horizontalLayout,
+  ) {
+    if (_portraitForm == portraitForm) return;
+    _portraitForm = portraitForm;
     _sync();
   }
 

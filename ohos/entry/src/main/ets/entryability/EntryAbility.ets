@@ -135,6 +135,13 @@ export default class EntryAbility extends FlutterAbility {
     this.handleContinuation(want, launchParam, true);
   }
 
+  onForeground(): void {
+    super.onForeground();
+    // 应用在后台折叠/展开时可能收不到 foldStatusChange：回前台补判一次设备
+    // 形态，避免继续沿用旧的「竖屏形态 / 跟随系统」方向策略。
+    deviceFormState.refreshNow();
+  }
+
   /**
    * 接续时的窗口恢复回调。系统在 onCreate（冷启动）**或** onNewWant（热启动）
    * 之后触发本回调而不是 onWindowStageCreate，两种情形都必须能正常加载窗口。

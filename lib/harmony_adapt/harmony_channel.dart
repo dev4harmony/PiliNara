@@ -2,10 +2,12 @@ import 'dart:math' show max;
 
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
+import 'package:PiliPlus/harmony_adapt/device/device_form.dart';
 import 'package:PiliPlus/harmony_adapt/window/window_facts.dart';
 import 'package:PiliPlus/harmony_adapt/continuation.dart';
 import 'package:PiliPlus/models/common/harmony/hds_material_level.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
+import 'package:PiliPlus/utils/global_data.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -103,11 +105,21 @@ abstract class HarmonyChannel {
       case 'onSafeAreaChange':
         _updateSafeArea(call.arguments);
         break;
-      // 设备形态变化（折叠/展开）：细长竖屏 ↔ 跟随系统，交给方向策略重算。
+      // 设备形态变化（折叠/展开、内外屏切换）：细长竖屏形态 + 横屏适配自动值。
       case 'onDeviceFormChange':
-        onDeviceFormChange?.call(
-          call.arguments['portraitForm'] as bool? ?? false,
+        final portraitForm = call.arguments['portraitForm'] as bool? ?? false;
+        final horizontalLayout =
+            call.arguments['horizontalLayout'] as bool? ?? false;
+        final layoutChanged =
+            HarmonyDeviceForm.horizontalLayout != horizontalLayout;
+        HarmonyDeviceForm.update(
+          portraitForm: portraitForm,
+          horizontalLayout: horizontalLayout,
         );
+        if (layoutChanged) {
+          _syncDynamicsWaterfallFlow();
+        }
+        onDeviceFormChange?.call(portraitForm, horizontalLayout);
         break;
       // 原生窗口快照（自由多窗/小窗/分屏/标题带状态的整体推送，
       // 见 ArkTS WindowState.emitSnapshot）
@@ -416,23 +428,46 @@ abstract class HarmonyChannel {
     } catch (_) {}
   }
 
-  /// 设备形态：是否「细长竖屏」（直板机 / 大折叠外屏）。
+  /// 设备形态（首帧前拉取一次）：细长竖屏形态 + 横屏适配自动值。
   ///
-  /// 原生侧按 `deviceType === 'phone'` 且当前屏幕长边/短边 ≥ 1.9 判定，
-  /// 折叠/展开后由 [onDeviceFormChange] 推送更新。通道异常返回 null，调用方
-  /// 据此保留原生首帧策略，而不是擅自当成「跟随系统」。
-  static Future<bool?> getDeviceForm() async {
-    if (!OS.isHarmony) return false;
+  /// 原生侧按 `deviceType`、折叠显示模式（内/外屏）与当前屏幕长边/短边判定，
+  /// 折叠/展开、内外屏切换后由 [onDeviceFormChange] 推送更新。通道异常返回
+  /// null，调用方保留原生首帧策略，而不是擅自当成「跟随系统」。
+  static Future<({bool portraitForm, bool horizontalLayout})?>
+  getDeviceForm() async {
+    if (!OS.isHarmony) return null;
     try {
       final result = await _channel.invokeMethod<Map>('getDeviceForm');
-      return result?['portraitForm'] == true;
+      if (result == null) return null;
+      return (
+        portraitForm: result['portraitForm'] == true,
+        horizontalLayout: result['horizontalLayout'] == true,
+      );
     } catch (_) {
       return null;
     }
   }
 
-  /// 原生推送：设备形态变化（折叠/展开）。
-  static void Function(bool portraitForm)? onDeviceFormChange;
+  /// 原生推送：设备形态变化（折叠/展开、内外屏切换）。
+  static void Function(bool portraitForm, bool horizontalLayout)?
+  onDeviceFormChange;
+
+  /// 横屏适配自动值变化时，同步依赖它的「动态页启用瀑布流」。
+  ///
+  /// 该开关未单独设置过时默认跟随横屏适配，而 `GlobalData` 只在应用启动时
+  /// 读一次（开关本身也标注「重启生效」）。设备折展导致自动值变化时，这里
+  /// 补一次同步并主动重建界面，让动态页立即按新布局渲染；用户显式设置过该
+  /// 开关时不刷新，保持「手动修改需重启」的原有语义。
+  static void _syncDynamicsWaterfallFlow() {
+    if (Pref.isDynamicsWaterfallFlowSet) return;
+    final data = GlobalData();
+    final value = Pref.dynamicsWaterfallFlow;
+    if (data.dynamicsWaterfallFlow == value) return;
+    data.dynamicsWaterfallFlow = value;
+    // 该值不是响应式的，折展后页面不一定会重建；这里主动重建一次。
+    // 折叠/展开属于低频操作，整树重建一次的开销可接受。
+    Get.forceAppUpdate();
+  }
 
   /// 系统「自动旋转」开关是否开启（即旋转锁定是否关闭）。
   ///

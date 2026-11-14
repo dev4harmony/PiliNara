@@ -21,7 +21,7 @@ import display from "@ohos.display";
 import settings from "@ohos.settings";
 import { appAppearance } from "../appearance/AppAppearance";
 import { MotionHand } from "../common/MotionHand";
-import { deviceFormState } from "../window/DeviceForm";
+import { DeviceFormSnapshot, deviceFormState } from "../window/DeviceForm";
 import { windowChrome } from "../window/WindowChrome";
 import { SafeAreaInsets, WindowSnapshot, windowState } from "../window/WindowState";
 
@@ -74,11 +74,13 @@ export default class HarmonyChannel implements FlutterPlugin, AbilityAware {
     windowState.setSafeAreaListener((insets: SafeAreaInsets): void => {
       this.channel?.invokeMethod("onSafeAreaChange", insets);
     });
-    // 设备形态（细长竖屏 / 跟随系统）变化：折叠、展开后重新判定并推给 Dart，
-    // 由 Dart 按「形态 + 页面类型 + 是否全屏」重算方向策略。
-    deviceFormState.attach((portraitForm: boolean): void => {
+    // 设备形态变化：折叠/展开、内外屏切换后重新判定并推给 Dart。
+    // - portraitForm：供方向策略按「形态 + 页面 + 视频方向 + 全屏」重算；
+    // - horizontalLayout：横屏适配自动值，仅决定布局（全页面统一）。
+    deviceFormState.attach((snapshot: DeviceFormSnapshot): void => {
       this.channel?.invokeMethod("onDeviceFormChange", {
-        'portraitForm': portraitForm,
+        'portraitForm': snapshot.portraitForm,
+        'horizontalLayout': snapshot.horizontalLayout,
       });
     });
     // // 监听画面方向
@@ -234,9 +236,11 @@ export default class HarmonyChannel implements FlutterPlugin, AbilityAware {
         break;
       }
       case "getDeviceForm": {
-        // 启动时给 Dart 一个初值：是否「细长竖屏」形态（直板机 / 大折叠外屏）。
+        // 启动时给 Dart 初值：细长竖屏形态（方向策略用）+ 横屏适配自动值（布局用）。
+        const snapshot: DeviceFormSnapshot = deviceFormState.currentSnapshot();
         const form: Record<string, boolean> = {
-          'portraitForm': deviceFormState.isPortraitForm(),
+          'portraitForm': snapshot.portraitForm,
+          'horizontalLayout': snapshot.horizontalLayout,
         };
         result.success(form);
         break;

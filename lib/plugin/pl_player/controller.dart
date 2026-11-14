@@ -2693,9 +2693,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       DateTime.now().difference(_lastFsExitAt) <
       const Duration(milliseconds: 600);
   // 每次读取而不缓存：播放器是跨页面存活的单例，缓存会让在设置页改完
-  // 「默认全屏方向」后本次会话仍用旧值，表现为「改了没反应」
+  // 「默认全屏方向」后本次会话仍用旧值，表现为「改了没反应」。
+  // horizontalScreen 同理：鸿蒙上它由设备形态/内外屏自动判定，折叠切换后
+  // 必须读到新值，不能缓存。
   FullScreenMode get mode => Pref.fullScreenMode;
-  late final horizontalScreen = Pref.horizontalScreen;
+  bool get horizontalScreen => Pref.horizontalScreen;
   late final removeSafeArea = Pref.removeSafeArea;
 
   Future<void>? changeOrientation({
