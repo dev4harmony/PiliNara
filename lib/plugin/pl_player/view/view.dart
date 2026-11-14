@@ -236,7 +236,6 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     });
   }
 
-  int? tmpSubtitlePaddingB;
   StreamSubscription? _controlsListener;
   void _onControlChanged(bool val) {
     final visible = val && !plPlayerController.controlsLock.value;
@@ -271,22 +270,30 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     if (widget.videoDetailController case final controller?) {
       if (controller.vttSubtitlesIndex.value != 0) {
         if (visible) {
-          const int minPadding = 70;
-          if (plPlayerController.subtitlePaddingB < minPadding) {
-            tmpSubtitlePaddingB = plPlayerController.subtitlePaddingB;
-            plPlayerController
-              ..subtitlePaddingB = minPadding
-              ..subtitleConfig.value = plPlayerController.getSubConfig;
-          }
+          _adjustSubPaddingIfNeeded();
         } else {
-          if (tmpSubtitlePaddingB != null) {
-            plPlayerController
-              ..subtitlePaddingB = tmpSubtitlePaddingB!
-              ..subtitleConfig.value = plPlayerController.getSubConfig;
-            tmpSubtitlePaddingB = null;
-          }
+          _resetSubPaddingIfNeeded();
         }
       }
+    }
+  }
+
+  void _adjustSubPaddingIfNeeded() {
+    const int minPadding = 70;
+    if (plPlayerController.subtitlePaddingB < minPadding) {
+      plPlayerController
+        ..tmpSubtitlePaddingB = plPlayerController.subtitlePaddingB
+        ..subtitlePaddingB = minPadding
+        ..updateSubtitleStyle();
+    }
+  }
+
+  void _resetSubPaddingIfNeeded() {
+    if (plPlayerController.tmpSubtitlePaddingB != null) {
+      plPlayerController
+        ..subtitlePaddingB = plPlayerController.tmpSubtitlePaddingB!
+        ..updateSubtitleStyle()
+        ..tmpSubtitlePaddingB = null;
     }
   }
 
@@ -506,6 +513,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     _brightnessListener?.cancel();
     _harmonyBrightnessSub?.cancel();
     _harmonyBrightnessSub = null;
+    _resetSubPaddingIfNeeded();
     _controlsListener?.cancel();
     _animationController.dispose();
     _disposeDanmakuMask();
@@ -1801,60 +1809,16 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
           ),
 
         if (!isLive && !widget.isInAppPip)
-          // 鸿蒙 media_kit fork 的 SubtitleView 没有上游 fork 的
-          // enableDragSubtitle/onUpdatePadding 参数，这里在 Dart 侧自行实现拖动。
           Positioned.fill(
-            top: null, // 不设置 top，避免字幕区域铺满并遮挡视频顶部触控
             child: IgnorePointer(
               ignoring: !plPlayerController.enableDragSubtitle,
-              child: GestureDetector(
-                onVerticalDragUpdate: (details) {
-                  final curPadding =
-                      plPlayerController.subtitleConfig.value.padding;
-                  plPlayerController
-                    ..onUpdatePadding(
-                      curPadding.copyWith(
-                        bottom: curPadding.bottom - details.delta.dy,
-                      ),
-                    )
-                    ..updateSubtitleStyle();
-                },
-                child: Obx(() {
-                  final videoController = plPlayerController.videoController;
-                  if (videoController == null) {
-                    return const SizedBox.shrink();
-                  }
-                  final config = plPlayerController.subtitleConfig.value;
-                  final padding = config.padding;
-                  return Padding(
-                    padding: padding.copyWith(
-                      // 防止太往上拖不回来
-                      bottom: padding.bottom.clamp(
-                        0,
-                        0.8 * MediaQuery.sizeOf(context).height,
-                      ),
-                    ),
-                    child: SubtitleView(
-                      // 同 Video：_SubtitleViewState 只在 initState 订阅
-                      // controller.player.stream.subtitle，didUpdateWidget
-                      // 不会重新订阅，所以换了 controller 必须换 State。
-                      key: ValueKey(videoController),
-                      controller: videoController,
-                      configuration: SubtitleViewConfiguration(
-                        // 去掉 SubtitleView 内部 padding，外部手动管理
-                        padding: EdgeInsets.zero,
-                        visible: config.visible,
-                        style: config.style,
-                        strokeStyle: config.strokeStyle,
-                        secondaryStyle: config.secondaryStyle,
-                        secondaryStrokeStyle: config.secondaryStrokeStyle,
-                        spacing: config.spacing,
-                        textAlign: config.textAlign,
-                        textScaler: config.textScaler,
-                      ),
-                    ),
-                  );
-                }),
+              child: Obx(
+                () => SubtitleView(
+                  controller: controller,
+                  configuration: plPlayerController.subtitleConfig.value,
+                  enableDragSubtitle: plPlayerController.enableDragSubtitle,
+                  onUpdatePadding: plPlayerController.onUpdatePadding,
+                ),
               ),
             ),
           ),
