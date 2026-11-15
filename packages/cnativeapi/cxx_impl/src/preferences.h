@@ -1,0 +1,74 @@
+#pragma once
+
+#include <memory>
+#include "storage.h"
+
+namespace nativeapi {
+
+/**
+ * @brief General-purpose key-value storage for application preferences.
+ *
+ * Similar to Web Storage's localStorage, this provides persistent storage
+ * for non-sensitive application data. Data is stored in plain text.
+ *
+ * @note Platform availability:
+ * - macOS: ✅ NSUserDefaults
+ * - Windows: ✅ Registry (HKEY_CURRENT_USER) or INI files
+ * - Linux: ✅ Configuration files (XDG Base Directory)
+ * - Android: ❌ Not implemented - Mutations fail and getters return defaults
+ * - iOS: ❌ Not implemented - Mutations fail and getters return defaults
+ * - OHOS: NDK Preferences in the application sandbox (API 23+); writes,
+ *   removals and clearing flush before returning. Instances with the same exact
+ *   scope share a synchronized SDK store until the final nativeapi owner closes.
+ *   SDK key/value/filename limits apply; embedded NUL keys/values are rejected.
+ *
+ * @warning Do not store sensitive data (passwords, tokens) here.
+ *          Use SecureStorage for sensitive data.
+ */
+class Preferences : public Storage {
+ public:
+  /**
+   * @brief Create preferences storage with default scope.
+   *
+   * Uses the fixed scope "default" on every platform.
+   */
+  Preferences();
+
+  /**
+   * @brief Create preferences storage with custom scope.
+   *
+   * @param scope Scope for isolating preferences
+   */
+  explicit Preferences(const std::string& scope);
+
+  virtual ~Preferences();
+
+  // Storage interface implementation
+  bool Set(const std::string& key, const std::string& value) override;
+  std::string Get(const std::string& key, const std::string& default_value = "") const override;
+  bool Remove(const std::string& key) override;
+  bool Clear() override;
+  bool Contains(const std::string& key) const override;
+  std::vector<std::string> GetKeys() const override;
+  size_t GetSize() const override;
+  std::map<std::string, std::string> GetAll() const override;
+
+  /**
+   * @brief Get the scope.
+   *
+   * @return The scope used for this preferences instance
+   */
+  std::string GetScope() const;
+
+  // Prevent copying and moving
+  Preferences(const Preferences&) = delete;
+  Preferences& operator=(const Preferences&) = delete;
+  Preferences(Preferences&&) = delete;
+  Preferences& operator=(Preferences&&) = delete;
+
+ private:
+  class Impl;
+  std::unique_ptr<Impl> pimpl_;
+};
+
+}  // namespace nativeapi

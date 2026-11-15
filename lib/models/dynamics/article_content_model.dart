@@ -1,6 +1,10 @@
 import 'package:PiliPlus/common/style.dart' as common_style;
+import 'package:PiliPlus/models/dynamics/eva3_comment.dart';
 import 'package:PiliPlus/models/dynamics/eva3_opus.dart';
+import 'package:PiliPlus/models/dynamics/eva3_toy.dart';
+import 'package:PiliPlus/models/dynamics/eva3_user.dart';
 import 'package:PiliPlus/models/dynamics/eva3_video.dart';
+import 'package:PiliPlus/models/dynamics/eva3_vote.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models/dynamics/vote_model.dart';
 import 'package:PiliPlus/utils/color_utils.dart';
@@ -17,6 +21,7 @@ class ArticleContentModel {
   Code? code;
   L1st? list;
   Text? heading;
+  Blockquote? blockquote;
 
   ArticleContentModel.fromJson(Map<String, dynamic> json) {
     align = json['align'];
@@ -31,6 +36,19 @@ class ArticleContentModel {
     code = json['code'] == null ? null : Code.fromJson(json['code']);
     list = json['list'] == null ? null : L1st.fromJson(json['list']);
     heading = json['heading'] == null ? null : Text.fromJson(json['heading']);
+    blockquote = json['blockquote'] == null
+        ? null
+        : Blockquote.fromJson(json['blockquote']);
+  }
+}
+
+class Blockquote {
+  List<ArticleContentModel>? children;
+
+  Blockquote.fromJson(Map<String, dynamic> json) {
+    children = (json['children'] as List?)
+        ?.map((e) => ArticleContentModel.fromJson(e))
+        .toList();
   }
 }
 
@@ -46,9 +64,9 @@ class Pic {
 
   Pic.fromJson(Map<String, dynamic> json) {
     url = json['url'];
-    width = (json['width'] as num?)?.toDouble();
-    height = (json['height'] as num?)?.toDouble();
-    size = json['size'];
+    width = parseDimension(json['width']);
+    height = parseDimension(json['height']);
+    size = parseDimension(json['size']);
     pics = (json['pics'] as List?)?.map((item) => Pic.fromJson(item)).toList();
     style = json['style'];
     liveUrl = json['live_url'];
@@ -143,9 +161,14 @@ class Word {
   //   "small"   → 13px
   //   "regular" → 16px（与旧版 HTML 专栏基准一致）
   //   其余/null → 同 regular
-  double get effectiveFontSize =>
-      fontSize ?? (fontLevel == 'small' ? 13.0 : 16.0);
+  double get effectiveFontSize => fontSize ?? _fontLevel2Size(fontLevel);
 }
+
+double _fontLevel2Size(String? fontLevel) => switch (fontLevel) {
+  'small' => 13.0,
+  'xxLarge' => 24.0,
+  _ => 16.0, // 'regular'
+};
 
 class Style {
   Style({
@@ -156,11 +179,15 @@ class Style {
   bool? bold;
   bool? italic;
   bool? strikethrough;
+  String? fontLevel;
+
+  double get fontSize => _fontLevel2Size(fontLevel);
 
   Style.fromJson(Map<String, dynamic> json) {
     bold = json['bold'];
     italic = json['italic'];
     strikethrough = json['strikethrough'];
+    fontLevel = json['font_level'];
   }
 }
 
@@ -219,7 +246,11 @@ class Card {
   Goods? goods;
   Eva3Video? eva3Video;
   Eva3Opus? eva3Opus;
-  // archive, match, reserve, upower_lottery, eva3_comment, eva3_user, eva3_vote
+  Eva3User? eva3User;
+  Eva3Toy? eva3Toy;
+  Eva3Vote? eva3Vote;
+  Eva3Comment? eva3Comment;
+  // archive, match, reserve, upower_lottery
 
   Card.fromJson(Map<String, dynamic> json) {
     oid = json['oid'];
@@ -240,6 +271,18 @@ class Card {
     eva3Opus = json['eva3_opus'] == null
         ? null
         : Eva3Opus.fromJson(json['eva3_opus']);
+    eva3User = json['eva3_user'] == null
+        ? null
+        : Eva3User.fromJson(json['eva3_user']);
+    eva3Toy = json['eva3_toy'] == null
+        ? null
+        : Eva3Toy.fromJson(json['eva3_toy']);
+    eva3Vote = json['eva3_vote'] == null
+        ? null
+        : Eva3Vote.fromJson(json['eva3_vote']);
+    eva3Comment = json['eva3_comment'] == null
+        ? null
+        : Eva3Comment.fromJson(json['eva3_comment']);
   }
 }
 

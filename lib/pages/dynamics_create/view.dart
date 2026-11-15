@@ -504,8 +504,6 @@ class _CreateDynPanelState extends CommonRichTextPubPageState<CreateDynPanel> {
           onPressed: _isEdit || _isPrivate.value
               ? null
               : () async {
-                  // 鸿蒙适配：弹出选择器期间冻结聊天面板，避免面板高度被重置
-                  controller.keepChatPanel();
                   DateTime nowDate = DateTime.now();
                   final selectedDate = await showDatePicker(
                     context: context,
@@ -551,7 +549,6 @@ class _CreateDynPanelState extends CommonRichTextPubPageState<CreateDynPanel> {
                       );
                     }
                   }
-                  controller.restoreChatPanel();
                 },
           child: const Text('定时发布'),
         )
@@ -656,8 +653,6 @@ class _CreateDynPanelState extends CommonRichTextPubPageState<CreateDynPanel> {
 
   Widget get voteBtn => ToolbarIconButton(
     onPressed: () async {
-      // 鸿蒙适配：跳转投票页期间冻结聊天面板
-      controller.keepChatPanel();
       final voteItem = editController.items.firstWhereOrNull(
         (e) => e.type == RichTextType.vote,
       );
@@ -702,35 +697,31 @@ class _CreateDynPanelState extends CommonRichTextPubPageState<CreateDynPanel> {
           );
         }
       }
-      controller.restoreChatPanel();
     },
     icon: const Icon(Icons.bar_chart_rounded, size: 24),
     tooltip: '投票',
     selected: false,
   );
 
-  Widget _buildEditWidget() => Obx(
-    () => RichTextField(
-      key: key,
-      controller: editController,
-      minLines: 4,
-      maxLines: null,
-      focusNode: focusNode,
-      readOnly: readOnly.value,
-      onChanged: onChanged,
-      onSubmitted: onSubmitted,
-      decoration: InputDecoration(
-        hintText: '说点什么吧',
-        visualDensity: VisualDensity.standard,
-        hintStyle: TextStyle(color: theme.colorScheme.outline),
-        border: const OutlineInputBorder(
-          borderSide: BorderSide.none,
-          gapPadding: 0,
-        ),
-        contentPadding: EdgeInsets.zero,
+  Widget _buildEditWidget() => RichTextField(
+    key: key,
+    controller: editController,
+    minLines: 4,
+    maxLines: null,
+    focusNode: focusNode,
+    onChanged: onChanged,
+    onSubmitted: onSubmitted,
+    decoration: InputDecoration(
+      hintText: '说点什么吧',
+      visualDensity: .standard,
+      hintStyle: TextStyle(color: theme.colorScheme.outline),
+      border: const OutlineInputBorder(
+        borderSide: BorderSide.none,
+        gapPadding: 0,
       ),
-      // inputFormatters: [LengthLimitingTextInputFormatter(1000)],
+      contentPadding: EdgeInsets.zero,
     ),
+    // inputFormatters: [LengthLimitingTextInputFormatter(1000)],
   );
 
   @override

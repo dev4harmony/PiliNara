@@ -30,6 +30,9 @@ abstract final class AndroidHelper {
 
   static bool get isFoldable => false;
 
+  /// 上游 2.6.2 新增（device_utils.isChromeOS 使用）。鸿蒙替身恒 false。
+  static bool get isChromeOS => false;
+
   static int sdkInt() => 0;
 
   static void updatePipActions(int engineId, bool isLive, bool playing) {}

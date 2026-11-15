@@ -24,8 +24,6 @@ import 'package:PiliPlus/pages/common/common_intro_controller.dart'
     show FavMixin;
 import 'package:PiliPlus/pages/dynamics_repost/view.dart';
 import 'package:PiliPlus/pages/main_reply/view.dart';
-import 'package:PiliPlus/pages/setting/models/play_settings.dart'
-    show kMaxVolume;
 import 'package:PiliPlus/pages/sponsor_block/block_mixin.dart';
 import 'package:PiliPlus/pages/video/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/widgets/triple_mixin.dart';
@@ -169,14 +167,16 @@ class AudioController extends GetxController
       _lastVolume = null;
     }
     desktopVolume.value = volume;
-    player?.setVolume(volume * 100);
+    setVolumeCapped(player, volume);
   }
 
   void syncVolume([_]) {
     final volume = desktopVolume.value;
-    PlPlayerController.instance
-      ?..volume.value = volume
-      ..videoPlayerController?.setVolume(volume * 100);
+    final videoController = PlPlayerController.instance;
+    if (videoController != null) {
+      videoController.volume.value = volume;
+      videoController.setVolumeCapped(videoController.videoPlayerController, volume);
+    }
     GStorage.setting.put(SettingBoxKey.desktopVolume, volume.toPrecision(3));
   }
 
@@ -228,7 +228,8 @@ class AudioController extends GetxController
       handler
         ..onPlay = onPlay
         ..onPause = onPause
-        ..onSeek = onSeek;
+        ..onSeek = onSeek
+        ..isPlaying = () => player?.state.playing ?? false;
       _savedOnSkipToPrevious = handler.onSkipToPrevious;
       _savedOnSkipToNext = handler.onSkipToNext;
       handler.onSkipToPrevious = () async => playPrev();
@@ -261,12 +262,25 @@ class AudioController extends GetxController
     return player?.state.playing ?? false;
   }
 
-  Future<void>? onPlay() {
-    return player?.play();
+  Future<void>? onPlay() async {
+    if (player == null) return;
+    await player?.play();
+    await audioSessionHandler?.setActive(true);
   }
 
-  Future<void>? onPause() {
-    return player?.pause();
+  Future<void>? onPause() async {
+    if (player == null) return;
+    await player?.pause();
+    await audioSessionHandler?.setActive(false);
+  }
+
+  Future<void>? playOrPause() {
+    if (player == null) return null;
+    if (player!.state.playing) {
+      return onPause();
+    } else {
+      return onPlay();
+    }
   }
 
   Future<void>? onSeek(Duration duration) {
@@ -390,10 +404,7 @@ class AudioController extends GetxController
           return;
         }
         if (_start == null) position.value = 0;
-        final audio = audios.findClosestTarget(
-          (e) => e.id <= cacheAudioQa,
-          (a, b) => a.id > b.id ? a : b,
-        );
+        final audio = audios.findTargetMedia((e) => e.id, cacheAudioQa);
         _onOpenMedia(VideoUtils.getCdnUrl(audio.playUrls), volume: volume);
       } else if (playInfo.hasPlayUrl()) {
         final playUrl = playInfo.playUrl;
@@ -415,10 +426,11 @@ class AudioController extends GetxController
     http_model.Volume? volume,
   }) async {
     await _initPlayerIfNeeded();
+    if (player == null) return;
     // 上游改用 player.setMediaHeader() + Media(extras:)；鸿蒙的 media_kit fork
     // (feat-ohos) 还没有 setMediaHeader，仍走 Media(httpHeaders:)，音频滤镜参数
     // 一并挂在同一个 Media 的 extras 上。
-    player?.open(
+    player!.open(
       Media(
         url,
         start: _start,
@@ -430,6 +442,11 @@ class AudioController extends GetxController
       ),
       play: _autoplayOnOpen,
     );
+    if (_autoplayOnOpen) {
+      // 上游此处是 open(play: false) + await onPlay()，音频会话的激活藏在
+      // onPlay 里；鸿蒙侧沿用 Media(httpHeaders:) 直接开播，这里补回激活。
+      await audioSessionHandler?.setActive(true);
+    }
     _autoplayOnOpen = true;
     _start = null;
   }
@@ -463,25 +480,13 @@ class AudioController extends GetxController
     assert(player == null, _subscriptions = null);
     player = Player(
       configuration: PlayerConfiguration(
-        // 上游用 PlayerConfiguration(options:)，鸿蒙的 media_kit fork 没有这个
-        // 字段，仍在 ready 回调里逐条 setProperty；'ao' 是安卓的音频输出后端，
-        // 鸿蒙不适用。
-        ready: () async {
-          final platform = player?.platform;
-          if (platform is! NativePlayer) return;
-          if (Platform.isAndroid) {
-            await platform.setProperty('ao', Pref.audioOutput);
-          }
-          await platform.setProperty('volume-max', kMaxVolume.toString());
-          await platform.setProperty(
-            'volume',
-            PlatformUtils.isDesktop
-                ? (desktopVolume.value * 100).toString()
-                : (Pref.enableAppVolume ? 100.0 : Pref.playerVolume).toString(),
-          );
-          for (final entry in Pref.initBuffer().entries) {
-            await platform.setProperty(entry.key, entry.value);
-          }
+        // 鸿蒙 media_kit fork 已补齐 options（镜像上游 native 分支的
+        // PlayerConfiguration.options，在 mpv_initialize 之前生效）；
+        // 'ao' 是安卓的音频输出后端，鸿蒙不适用。音量由下方 setVolumeCapped
+        // 统一施加（>100% 走 af 增益+限幅），不再单独下发 volume-max/volume。
+        options: {
+          if (Platform.isAndroid) 'ao': Pref.audioOutput,
+          ...Pref.initBuffer(),
         },
       ),
     );
@@ -490,6 +495,13 @@ class AudioController extends GetxController
       player = null;
       return;
     }
+    // >100% 的音量走 af 增益+限幅，避免直接放大 mpv volume 导致削波
+    await setVolumeCapped(
+      player,
+      PlatformUtils.isDesktop
+          ? desktopVolume.value
+          : (Pref.enableAppVolume ? 1.0 : Pref.playerVolume / 100),
+    );
     final stream = player!.stream;
     _subscriptions = [
       stream.position.listen((position) {
@@ -785,10 +797,6 @@ class AudioController extends GetxController
     );
   }
 
-  Future<void>? playOrPause() {
-    return player?.playOrPause();
-  }
-
   bool playPrev() {
     if (index != null && playlist != null && player != null) {
       final prev = index! - 1;
@@ -899,8 +907,7 @@ class AudioController extends GetxController
   int? get timeLength => player?.state.duration.inMilliseconds ?? 0;
 
   @override
-  Future<void>? seekTo(Duration duration, {required bool isSeek}) =>
-      onSeek(duration);
+  Future<void>? seekTo(Duration duration) => onSeek(duration);
 
   @override
   bool get autoPlay => true;
@@ -916,17 +923,21 @@ class AudioController extends GetxController
       ..onPause = null
       ..isPlaying = null
       ..reset();
-    videoPlayerServiceHandler
-      ?..onPlay = null
-      ..onPause = null
-      ..onSeek = null
-      ..onSkipToNext = null
-      ..onSkipToPrevious = null
-      ..onVideoDetailDispose(heroTag)
-      ..onSkipToPrevious = _savedOnSkipToPrevious
-      ..onSkipToNext = _savedOnSkipToNext
-      ..onRepeatModeChanged = _savedOnRepeatModeChanged
-      ..clearIfNeeded();
+    final handler = videoPlayerServiceHandler;
+    if (handler?.onPlay == onPlay) {
+      handler!
+        ..onPlay = null
+        ..onPause = null
+        ..onSeek = null
+        ..onSkipToNext = null
+        ..onSkipToPrevious = null
+        ..isPlaying = null
+        ..onVideoDetailDispose(heroTag)
+        ..onSkipToPrevious = _savedOnSkipToPrevious
+        ..onSkipToNext = _savedOnSkipToNext
+        ..onRepeatModeChanged = _savedOnRepeatModeChanged
+        ..clearIfNeeded();
+    }
     _playModeSub?.cancel();
     _playModeSub = null;
     _subscriptions?.forEach((e) => e.cancel());

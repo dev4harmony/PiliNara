@@ -13,6 +13,8 @@ class ListEditorDialog extends StatefulWidget {
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final String? Function(String)? validator;
+  /// 判断单项是否能编译为正则，返回 false 的项会在行下方标注错误。
+  final bool Function(String)? patternValidator;
   // When false, existing items use SelectableText instead of editable TextField
   final bool allowEdit;
 
@@ -25,6 +27,7 @@ class ListEditorDialog extends StatefulWidget {
     this.keyboardType,
     this.inputFormatters,
     this.validator,
+    this.patternValidator,
     this.allowEdit = true,
   });
 
@@ -38,12 +41,25 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
   final TextEditingController _addController = TextEditingController();
   final FocusNode _addFocusNode = FocusNode();
   final Set<int> _invalidEditIndexes = {};
+  final Set<int> _invalidPatternIndexes = {};
+  String? _addError;
 
   @override
   void initState() {
     super.initState();
     _items = List<String>.from(widget.initialItems);
     _controllers = _items.map((e) => TextEditingController(text: e)).toList();
+    _revalidatePatterns();
+  }
+
+  /// 整表重算，仅在增删项时调用：下标会移位，无法逐项维护。
+  void _revalidatePatterns() {
+    final check = widget.patternValidator;
+    _invalidPatternIndexes.clear();
+    if (check == null) return;
+    for (int i = 0; i < _items.length; i++) {
+      if (!check(_items[i])) _invalidPatternIndexes.add(i);
+    }
   }
 
   @override
@@ -63,9 +79,7 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
     if (widget.validator != null) {
       final error = widget.validator!(value);
       if (error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error), duration: const Duration(seconds: 2)),
-        );
+        setState(() => _addError = error);
         return false;
       }
     }
@@ -75,6 +89,8 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
         _items.add(value);
         _controllers.add(TextEditingController(text: value));
         _addController.clear();
+        _addError = null;
+        _revalidatePatterns();
       });
       return true;
     } else {
@@ -87,21 +103,19 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
     final value = _controllers[index].text.trim();
     if (value.isEmpty) {
       _controllers[index].text = _items[index];
-      _invalidEditIndexes.remove(index);
+      _clearSlot(index);
       return true;
     }
     if (value == _items[index]) {
-      _invalidEditIndexes.remove(index);
+      _clearSlot(index);
       return true;
     }
 
     if (widget.validator != null) {
       final error = widget.validator!(value);
       if (error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error), duration: const Duration(seconds: 2)),
-        );
-        _invalidEditIndexes.add(index);
+        SmartDialog.showToast(error);
+        setState(() => _invalidEditIndexes.add(index));
         return false;
       }
     }
@@ -113,9 +127,14 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
       return false;
     }
 
-    _invalidEditIndexes.remove(index);
     setState(() {
       _items[index] = value;
+      _invalidEditIndexes.remove(index);
+      if (widget.patternValidator?.call(value) case final valid?) {
+        valid
+            ? _invalidPatternIndexes.remove(index)
+            : _invalidPatternIndexes.add(index);
+      }
     });
     return true;
   }
@@ -124,13 +143,32 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
     SmartDialog.showToast('该${widget.itemLabel}已存在');
   }
 
+  /// 两个错误集合按槽位独立清理：
+  /// 值回退或恢复为原值时，校验错误没被捕捉，但残留的模式错误仍应显示。
+  void _clearSlot(int index) {
+    _invalidEditIndexes.remove(index);
+    final original = _items[index];
+    if (widget.patternValidator?.call(original) case final valid?) {
+      valid
+          ? _invalidPatternIndexes.remove(index)
+          : _invalidPatternIndexes.add(index);
+    }
+  }
+
   void _removeItem(int index) {
     _controllers[index].dispose();
     _invalidEditIndexes.clear();
     setState(() {
       _items.removeAt(index);
       _controllers.removeAt(index);
+      _revalidatePatterns();
     });
+  }
+
+  String? _errorTextOf(int index) {
+    if (_invalidPatternIndexes.contains(index)) return '无效的正则表达式';
+    if (_invalidEditIndexes.contains(index)) return '该项未通过校验';
+    return null;
   }
 
   @override
@@ -157,7 +195,11 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
                     decoration: InputDecoration(
                       hintText: widget.hintText,
                       isDense: true,
+                      errorText: _addError,
                     ),
+                    onChanged: (_) {
+                      if (_addError != null) setState(() => _addError = null);
+                    },
                     onSubmitted: (_) => _addItem(),
                   ),
                 ),
@@ -206,10 +248,11 @@ class _ListEditorDialogState extends State<ListEditorDialog> {
                                   keyboardType: widget.keyboardType,
                                   inputFormatters: widget.inputFormatters,
                                   style: theme.textTheme.bodyMedium,
-                                  decoration: const InputDecoration(
+                                  decoration: InputDecoration(
                                     isDense: true,
                                     border: InputBorder.none,
                                     contentPadding: EdgeInsets.zero,
+                                    errorText: _errorTextOf(index),
                                   ),
                                   onChanged: (_) {
                                     _invalidEditIndexes.remove(index);

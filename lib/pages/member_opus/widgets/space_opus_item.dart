@@ -1,3 +1,4 @@
+import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/cached_layout_builder.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/stat/stat.dart';
@@ -39,6 +40,9 @@ class SpaceOpusItem extends StatelessWidget {
                       src: item.cover!.url,
                       type: ImageType.emote,
                       quality: 60,
+                      alignment: item.cover!.ratio >= Style.imgMaxRatio
+                          ? .topCenter
+                          : .center,
                     ),
                   ),
                   Positioned(

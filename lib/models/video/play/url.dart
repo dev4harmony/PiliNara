@@ -1,7 +1,6 @@
 import 'dart:math' show max, min;
 
-import 'package:PiliPlus/models/common/video/audio_quality.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models_new/sponsor_block/segment_item.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -57,16 +56,6 @@ class PlayUrlModel {
   String? curLanguage;
   Language? language;
   List<SegmentItemModel>? clipInfoList;
-
-  int findAvailableVideoQuality(int preferredQuality) {
-    final curHighestVideoQa = dash!.video!.first.quality.code;
-    if (acceptQuality case final qualitys?
-        when preferredQuality <= curHighestVideoQa) {
-      return qualitys.findClosestTarget((e) => e <= preferredQuality, max);
-    } else {
-      return curHighestVideoQa;
-    }
-  }
 
   @pragma('vm:notify-debugger-on-exception')
   int get missingVideoQualityBelowHighest {

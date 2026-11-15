@@ -92,6 +92,7 @@ class MainController extends GetxController
 
   final floatingNavBar = Pref.floatingNavBar;
   final useSideBar = Pref.useSideBar;
+  final hideSideBarLabel = Pref.hideSideBarLabel;
   final mainTabBarView = Pref.mainTabBarView;
   late final optTabletNav = Pref.optTabletNav;
 
@@ -459,10 +460,10 @@ class MainController extends GetxController
         () {
           switch (currentNav) {
             case NavigationBarType.home:
-              homeController.onRefresh();
+              homeController.showRefresh();
               break;
             case NavigationBarType.dynamics:
-              dynamicController.onRefresh();
+              dynamicController.showRefresh();
               break;
             case NavigationBarType.mine:
               Get.putOrFind(MineController.new).onRefresh();
@@ -511,7 +512,7 @@ class MainController extends GetxController
     if (navigationBars[selectedIndex.value] == NavigationBarType.home &&
         homeController.tabs[homeController.tabController.index] ==
             HomeTabType.rcmd) {
-      homeController.onRefresh();
+      homeController.showRefresh();
       return true;
     }
     return false;

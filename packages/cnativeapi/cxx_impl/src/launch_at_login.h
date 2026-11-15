@@ -1,0 +1,235 @@
+#pragma once
+
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace nativeapi {
+
+/**
+ * @brief Manage launching the application at user login (cross-platform).
+ *
+ * LaunchAtLogin provides a unified API to enable or disable starting your application
+ * automatically when the user logs in. The actual mechanism is platform-specific,
+ * but this class abstracts away those differences.
+ *
+ * Platform implementations:
+ * - Windows: HKCU\Software\Microsoft\Windows\CurrentVersion\Run registry key, and the
+ *   matching Explorer\StartupApproved\Run flag so that an entry the user switched off in
+ *   Task Manager reads as disabled. An app running from an MSIX package sees a virtualized
+ *   registry instead, so there it is a shortcut in the user's Startup folder.
+ * - macOS: ServiceManagement SMAppService for the main app or bundled login item helpers
+ * - Linux (XDG): ~/.config/autostart/[app_id].desktop
+ * - Android/iOS: Not supported (returns false from IsSupported/operations)
+ * - OpenHarmony: Current-bundle startup status through the public API 21+ SDK.
+ *   Programmatic registration is unavailable: IsSupported/Enable/Disable return
+ *   false. Metadata can be recorded; arbitrary executables are unsupported.
+ *
+ * Notes:
+ * - This API is intended for desktop environments. On mobile platforms this API is
+ *   typically unsupported by design. Methods will fail gracefully.
+ * - You can let the implementation determine the current executable path, or call
+ *   SetProgram() to customize the target binary and arguments recorded in the OS where the
+ *   platform supports arbitrary launch commands. On macOS, SMAppService can only register
+ *   the main app or a bundled helper, so a custom executable path is not supported and
+ *   arguments are never delivered.
+ * - Some platforms may require application-specific permissions or entitlements
+ *   (e.g., sandbox restrictions on macOS). In such cases, operations may fail.
+ *
+ * Typical usage:
+ * @code
+ * using namespace nativeapi;
+ *
+ * if (LaunchAtLogin::IsSupported()) {
+ *   LaunchAtLogin launch_at_login("com.example.myapp", "MyApp");
+ *   // Optionally override the program and arguments where supported:
+ *   launch_at_login.SetProgram("/usr/local/bin/myapp", {"--minimized"});
+ *
+ *   launch_at_login.Enable();
+ *   bool enabled = launch_at_login.IsEnabled(); // should be true
+ * }
+ * @endcode
+ */
+class LaunchAtLogin {
+ public:
+  /**
+   * @brief Check whether launch-at-login is supported on this platform.
+   *
+   * @return true if programmatic startup registration is supported; false otherwise.
+   * OpenHarmony can still query the current bundle status through IsEnabled(),
+   * but its public SDK has no registration controls, so this method returns false.
+   */
+  static bool IsSupported();
+
+  /**
+   * @brief Construct a LaunchAtLogin manager with default identifier and display name.
+   *
+   * The default identifier and display name are implementation-defined. Typically,
+   * the identifier is derived from the current process/bundle information, and the
+   * display name is derived from the application or executable name.
+   */
+  LaunchAtLogin();
+
+  /**
+   * @brief Construct a LaunchAtLogin manager with a custom identifier.
+   *
+   * @param id A stable, unique identifier for your app.
+   *           Examples:
+   *           - Windows: used as the registry value name, e.g., "MyApp"
+   *           - macOS: bundle identifier for a bundled LoginItem helper, e.g.,
+   *             "com.example.myapp.Helper"; the default constructor registers the main app
+   *           - Linux: used as the .desktop file name (without extension), e.g., "myapp"
+   *
+   * Recommendation: Use a reverse-DNS identifier when possible, e.g., "com.example.myapp".
+   */
+  explicit LaunchAtLogin(const std::string& id);
+
+  /**
+   * @brief Construct a LaunchAtLogin manager with a custom identifier and display name.
+   *
+   * @param id           Stable, unique identifier (see above).
+   * @param display_name Human-readable name shown in OS surfaces where applicable.
+   */
+  LaunchAtLogin(const std::string& id, const std::string& display_name);
+
+  virtual ~LaunchAtLogin();
+
+  /**
+   * @brief Get the unique identifier associated with this LaunchAtLogin instance.
+   *
+   * @return The identifier string.
+   */
+  std::string GetId() const;
+
+  /**
+   * @brief Get the human-readable display name used where applicable.
+   *
+   * @return The display name string.
+   */
+  std::string GetDisplayName() const;
+
+  /**
+   * @brief Set a human-readable display name used where applicable.
+   *
+   * Some platforms surface a name in their UI (e.g., Linux .desktop Name).
+   *
+   * @param display_name The human-readable name.
+   * @return true if the value was stored locally; does not change OS registration until Enable().
+   *
+   * @note Platform availability:
+   * - macOS: ⚠️ Metadata only; ServiceManagement uses the bundle label.
+   * - Windows: ✅ Stored locally; used for packaged-app startup shortcuts.
+   * - Linux: ✅ Stored locally; written to the XDG entry by Enable().
+   * - Android: ❌ Always returns false.
+   * - iOS: ❌ Always returns false.
+   * - OpenHarmony: ⚠️ Metadata only; Settings continues to use the bundle label.
+   */
+  bool SetDisplayName(const std::string& display_name);
+
+  /**
+   * @brief Set the program (executable) path and optional arguments used to launch at login.
+   *
+   * If not set, implementations will try to use the current process executable path.
+   * On platforms that require a single string (e.g., Windows registry), arguments will
+   * be encoded appropriately (quoted when needed). On Linux, arguments are stored in
+   * the .desktop Exec line. On macOS, SMAppService does not support arbitrary
+   * executable paths or arguments for main-app login items.
+   *
+   * @param executable_path Absolute path to the executable to run on login.
+   * @param arguments       Optional arguments; order is preserved.
+   * @return true if stored locally; does not change OS registration until Enable().
+   *
+   * @note Platform availability:
+   * - macOS: ⚠️ Recorded only - SMAppService starts the app bundle; naming the running
+   *   application registers it whatever the identifier says, any other path makes Enable()
+   *   fail, and arguments are never delivered
+   * - Windows: ✅ Fully supported - written as a quoted command line
+   * - Linux: ✅ Fully supported - written to the .desktop Exec line
+   * - Android: ❌ Not applicable - Always ignored
+   * - iOS: ❌ Not applicable - Always ignored
+   * - OpenHarmony: ❌ Not applicable - Always ignored
+   */
+  bool SetProgram(const std::string& executable_path,
+                  const std::vector<std::string>& arguments = {});
+
+  /**
+   * @brief Get the currently configured executable path used to launch at login.
+   *
+   * This returns the locally configured value (not necessarily what is stored in the OS).
+   * If never set explicitly and cannot be resolved from the current process, it may be empty.
+   *
+   * @return Executable path string (may be empty).
+   */
+  std::string GetExecutablePath() const;
+
+  /**
+   * @brief Get the currently configured arguments used to launch at login.
+   *
+   * This returns the locally configured value (not necessarily what is stored in the OS).
+   *
+   * @return Vector of arguments (may be empty).
+   */
+  std::vector<std::string> GetArguments() const;
+
+  /**
+   * @brief Enable launch-at-login for the configured program and arguments.
+   *
+   * If no program was explicitly set via SetProgram(), the implementation will attempt
+   * to resolve the current executable path and use that as the program to start.
+   *
+   * @return true on success; false on error or when unsupported.
+   *
+   * @note Platform availability:
+   * - macOS: ⚠️ Recorded only - fails when the user has denied the app in System Settings,
+   *   or when SetProgram() named an executable that is not this application
+   * - Windows: ✅ Fully supported - also clears the Task Manager "disabled" flag
+   * - Linux: ✅ Fully supported
+   * - Android: ❌ Not applicable - Always returns false
+   * - iOS: ❌ Not applicable - Always returns false
+   * - OpenHarmony: ❌ Not applicable - Always returns false
+   */
+  bool Enable();
+
+  /**
+   * @brief Disable launch-at-login.
+   *
+   * @return true on success; false on error or when unsupported.
+   */
+  bool Disable();
+
+  /**
+   * @brief Query whether launch-at-login is currently enabled for this manager's identifier.
+   *
+   * This checks the platform-specific mechanism for an entry under this manager's
+   * identifier. It does not compare the registered command against the program and
+   * arguments currently configured: an entry written by an older version of the app, from
+   * a different path, still reads as enabled.
+   *
+   * @return true if currently enabled; false otherwise.
+   *
+   * @note Platform availability:
+   * - macOS: ✅ Reads the main app or bundled helper registration status.
+   * - Windows: ✅ Reads the registration and applicable user-disabled state.
+   * - Linux: ✅ Reads the XDG autostart registration.
+   * - Android: ❌ Always returns false.
+   * - iOS: ❌ Always returns false.
+   * - OpenHarmony: ⚠️ Reads only the current bundle through the initialized UI
+   *   environment. Worker calls await the actual SDK Promise; UI calls request a
+   *   refresh and return the last completed value for that environment, initially
+   *   false. Missing host, invalid/foreign identifier and SDK failure return false.
+   *   Enable/Disable remain unavailable; the user controls startup in Settings.
+   */
+  bool IsEnabled() const;
+
+  // Prevent copying and moving
+  LaunchAtLogin(const LaunchAtLogin&) = delete;
+  LaunchAtLogin& operator=(const LaunchAtLogin&) = delete;
+  LaunchAtLogin(LaunchAtLogin&&) = delete;
+  LaunchAtLogin& operator=(LaunchAtLogin&&) = delete;
+
+ private:
+  class Impl;
+  std::unique_ptr<Impl> pimpl_;
+};
+
+}  // namespace nativeapi

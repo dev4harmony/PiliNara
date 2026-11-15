@@ -4,7 +4,10 @@ import 'dart:math' as math;
 import 'package:PiliPlus/common/widgets/color_palette.dart';
 import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
+import 'package:PiliPlus/common/widgets/emote_tooltip.dart'
+    show enableEmoteTooltip;
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/pendant_avatar.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_physics.dart'
@@ -15,6 +18,7 @@ import 'package:PiliPlus/models/common/bar_hide_type.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamic_badge_mode.dart';
 import 'package:PiliPlus/models/common/dynamic/up_panel_position.dart';
 import 'package:PiliPlus/models/common/home_tab_type.dart';
+import 'package:PiliPlus/models/common/member/tab_type.dart';
 import 'package:PiliPlus/models/common/mine_tab_type.dart';
 import 'package:PiliPlus/models/common/msg/msg_unread_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
@@ -90,6 +94,14 @@ List<SettingsModel> get styleSettings => [
     defaultVal: false,
     onTap: _showSideBarThresholdDialog,
   ),
+  const SwitchModel(
+    title: '隐藏侧边栏文字',
+    subtitle: '仅显示图标，减少侧边栏占用宽度',
+    leading: Icon(Icons.label_off_outlined),
+    setKey: SettingBoxKey.hideSideBarLabel,
+    defaultVal: false,
+    needReboot: true,
+  ),
   NormalModel(
     title: 'App字体设置',
     subtitle: '点击设置',
@@ -102,6 +114,21 @@ List<SettingsModel> get styleSettings => [
     leading: const Icon(Icons.zoom_in_outlined),
     onTap: _showUiScaleDialog,
   ),
+  const SwitchModel(
+    title: '首页切换页面动画',
+    leading: Icon(Icons.home_outlined),
+    setKey: SettingBoxKey.mainTabBarView,
+    defaultVal: false,
+    needReboot: true,
+  ),
+  if (PlatformUtils.isDesktop)
+    const SwitchModel(
+      title: '首页显示刷新按钮',
+      leading: Icon(Icons.refresh),
+      setKey: SettingBoxKey.showRefreshFAB,
+      defaultVal: true,
+      needReboot: true,
+    ),
   NormalModel(
     title: '页面过渡动画',
     leading: const Icon(Icons.animation),
@@ -146,6 +173,27 @@ List<SettingsModel> get styleSettings => [
     setKey: SettingBoxKey.floatingNavBar,
     defaultVal: false,
     needReboot: true,
+  ),
+  SwitchModel(
+    title: '显示粉丝勋章',
+    leading: const Icon(MdiIcons.medalOutline),
+    setKey: SettingBoxKey.showMedal,
+    defaultVal: true,
+    onChanged: (value) => GlobalData().showMedal = value,
+  ),
+  SwitchModel(
+    title: '展示头像/评论/动态装饰',
+    leading: const Icon(MdiIcons.stickerCircleOutline),
+    setKey: SettingBoxKey.showDecorate,
+    defaultVal: true,
+    onChanged: (value) => PendantAvatar.showDecorate = value,
+  ),
+  SwitchModel(
+    title: '点击表情显示 Tooltip',
+    leading: const Icon(Icons.emoji_emotions_outlined),
+    setKey: SettingBoxKey.enableEmoteTooltip,
+    defaultVal: false,
+    onChanged: (value) => enableEmoteTooltip = value,
   ),
   NormalModel(
     leading: const Icon(Icons.calendar_view_week_outlined),
@@ -239,6 +287,19 @@ List<SettingsModel> get styleSettings => [
           .whenComplete(setState);
       SmartDialog.showToast('重启生效');
     },
+  ),
+  NormalModel(
+    title: '用户页默认展示TAB',
+    leading: const Icon(Icons.tab),
+    getSubtitle: () => '当前优先展示「${Pref.memberTab.title}」',
+    onTap: _showMemberTabDialog,
+  ),
+  SwitchModel(
+    title: '显示UP主页小店TAB',
+    leading: const Icon(Icons.shop_outlined),
+    setKey: SettingBoxKey.showMemberShop,
+    defaultVal: false,
+    onChanged: (value) => MemberTabType.showMemberShop = value,
   ),
   SwitchModel(
     title: '首页顶栏收起',
@@ -783,7 +844,7 @@ void _setDynBadge(DynamicBadgeMode value, VoidCallback setState) {
       .whenComplete(setState);
 }
 
-Future<void> _setMsgBadge(DynamicBadgeMode value, VoidCallback setState) async {
+void _setMsgBadge(DynamicBadgeMode value, VoidCallback setState) {
   final mainController = Get.find<MainController>()..msgBadgeMode = value;
   if (value != DynamicBadgeMode.hidden) {
     mainController.queryUnreadMsg(true);
@@ -975,6 +1036,24 @@ Future<void> _showMineTabsDialog(
       res.map((item) => item.index).toList(),
     );
     SmartDialog.showToast('重启生效');
+    setState();
+  }
+}
+
+Future<void> _showMemberTabDialog(
+  BuildContext context,
+  VoidCallback setState,
+) async {
+  final res = await showDialog<MemberTabType>(
+    context: context,
+    builder: (context) => SelectDialog<MemberTabType>(
+      title: '用户页默认展示TAB',
+      value: Pref.memberTab,
+      values: MemberTabType.values.map((e) => (e, e.title)).toList(),
+    ),
+  );
+  if (res != null) {
+    await GStorage.setting.put(SettingBoxKey.memberTab, res.index);
     setState();
   }
 }

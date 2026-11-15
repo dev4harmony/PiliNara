@@ -63,6 +63,32 @@ abstract final class FontUtils {
   static bool isCustomFont(String? fontFamily) =>
       fontFamily != null && customFonts.containsKey(fontFamily);
 
+  /// 文件名是否为支持的字体文件
+  static bool isSupportedFontFile(String fileName) =>
+      _kFontExts.contains(path.extension(fileName).replaceFirst('.', ''));
+
+  /// 当前应用字体对应的字体文件；未选用导入字体或文件已丢失时返回 null
+  static File? get activeFontFile {
+    final filePath = customFonts[Pref.appFont];
+    if (filePath == null) return null;
+    final file = File(filePath);
+    return file.existsSync() ? file : null;
+  }
+
+  /// 把外部字体文件装入导入池并登记，返回字体族名。
+  ///
+  /// 供配置归档导入使用：导入后由调用方决定是否把 [Pref.appFont] 指向它。
+  static Future<String?> adoptFontFile(
+    String filePath, {
+    String? displayName,
+  }) async {
+    final family = await _adoptLegacyFont(filePath, displayName);
+    if (family != null) {
+      await _saveFonts();
+    }
+    return family;
+  }
+
   static Future<void> _saveFonts() => GStorage.setting.putAll({
     SettingBoxKey.customAppFont: customFonts,
     SettingBoxKey.customAppFontNames: _customFontNames,

@@ -1,0 +1,298 @@
+// AUTO-GENERATED. DO NOT EDIT.
+// Any manual changes WILL BE LOST when this file is regenerated.
+
+#include "application_c.h"
+
+#include <cstdio>
+#include <memory>
+#include <new>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "string_utils_c.h"
+#include "user_data.h"
+#include "event_delivery.h"
+#include "../foundation/handle_table.h"
+#include "../foundation/event_request.h"
+#include "event_request_c.h"
+#include "../window.h"
+#include "window_c.h"
+#include "../menu.h"
+#include "menu_c.h"
+#include "../application.h"
+
+int native_application_run(void) {
+  try {
+    return nativeapi::Application::GetInstance().Run();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_run");
+    return 0;
+  }
+}
+
+int native_application_run_with_window(native_window_t window) {
+  try {
+    auto window_cpp = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::Window>(window);
+    return nativeapi::Application::GetInstance().Run(window_cpp);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_run_with_window");
+    return 0;
+  }
+}
+
+void native_application_quit(int exit_code) {
+  try {
+    nativeapi::Application::GetInstance().Quit(exit_code);
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_quit");
+    return;
+  }
+}
+
+bool native_application_is_running(void) {
+  try {
+    return nativeapi::Application::GetInstance().IsRunning();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_is_running");
+    return false;
+  }
+}
+
+bool native_application_is_single_instance(void) {
+  try {
+    return nativeapi::Application::GetInstance().IsSingleInstance();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_is_single_instance");
+    return false;
+  }
+}
+
+bool native_application_show(void) {
+  try {
+    return nativeapi::Application::GetInstance().Show();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_show");
+    return false;
+  }
+}
+
+bool native_application_hide(void) {
+  try {
+    return nativeapi::Application::GetInstance().Hide();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_hide");
+    return false;
+  }
+}
+
+bool native_application_is_visible(void) {
+  try {
+    return nativeapi::Application::GetInstance().IsVisible();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_is_visible");
+    return false;
+  }
+}
+
+bool native_application_set_icon(const char* icon_path) {
+  try {
+    return nativeapi::Application::GetInstance().SetIcon(std::string(icon_path ? icon_path : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_icon");
+    return false;
+  }
+}
+
+bool native_application_set_dock_icon_visible(bool visible) {
+  try {
+    return nativeapi::Application::GetInstance().SetDockIconVisible(visible);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_dock_icon_visible");
+    return false;
+  }
+}
+
+bool native_application_set_progress_bar(double progress) {
+  try {
+    return nativeapi::Application::GetInstance().SetProgressBar(progress);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_progress_bar");
+    return false;
+  }
+}
+
+bool native_application_set_badge_label(const char* label) {
+  try {
+    return nativeapi::Application::GetInstance().SetBadgeLabel(std::string(label ? label : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_badge_label");
+    return false;
+  }
+}
+
+bool native_application_set_brightness(native_brightness_t brightness) {
+  try {
+    return nativeapi::Application::GetInstance().SetBrightness(to_cpp_brightness(brightness));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_brightness");
+    return false;
+  }
+}
+
+bool native_application_set_menu_bar(native_menu_t menu) {
+  try {
+    auto menu_cpp = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::Menu>(menu);
+    return nativeapi::Application::GetInstance().SetMenuBar(menu_cpp);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_menu_bar");
+    return false;
+  }
+}
+
+native_window_t native_application_get_primary_window(void) {
+  try {
+    return nativeapi::HandleTable::GetInstance().Insert(nativeapi::Application::GetInstance().GetPrimaryWindow());
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_get_primary_window");
+    return 0;
+  }
+}
+
+void native_application_set_primary_window(native_window_t window) {
+  try {
+    auto window_cpp = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::Window>(window);
+    nativeapi::Application::GetInstance().SetPrimaryWindow(window_cpp);
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_set_primary_window");
+    return;
+  }
+}
+
+native_window_list_t native_application_get_all_windows(void) {
+  try {
+    const auto items = nativeapi::Application::GetInstance().GetAllWindows();
+    native_window_list_t list = {};
+    if (items.empty()) {
+      return list;
+    }
+    list.windows = new (std::nothrow) native_window_t[items.size()];
+    if (!list.windows) {
+      return list;
+    }
+    for (size_t i = 0; i < items.size(); ++i) {
+      list.windows[i] = nativeapi::HandleTable::GetInstance().Insert(items[i]);
+    }
+    list.count = static_cast<long>(items.size());
+    return list;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_application_get_all_windows");
+    native_window_list_t empty = {};
+    return empty;
+  }
+}
+
+native_listener_id_t native_application_add_listener(native_application_event_callback_t callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) {
+    return 0;
+  }
+  try {
+    return static_cast<native_listener_id_t>(nativeapi::Application::GetInstance().AddListener<nativeapi::ApplicationEvent>(
+        [callback, holder](const nativeapi::ApplicationEvent& event) {
+          if (holder->revoked()) return;
+          native_application_event_t c_event = {};
+          if (!to_c_application_event(event, &c_event)) {
+            return;
+          }
+          callback(&c_event, holder->get());
+          free_c_application_event(&c_event);
+        }));
+  } catch (...) {
+    return 0;
+  }
+}
+
+native_listener_id_t native_application_add_listener_async(native_application_event_callback_t_async callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) return 0;
+  try {
+    auto registration = std::make_shared<nativeapi::capi::EventDeliveryRegistration>(holder);
+    return static_cast<native_listener_id_t>(nativeapi::detail::EventListenerDispatch::AddListener<nativeapi::ApplicationEvent>(nativeapi::Application::GetInstance(),
+        [callback, registration](const nativeapi::ApplicationEvent& event) {
+          if (registration->context->holder->revoked()) return;
+          std::shared_ptr<nativeapi::EventRequest> request;
+          if (const auto* typed = dynamic_cast<const nativeapi::ApplicationQuitRequestedEvent*>(&event)) request = typed->GetRequest();
+          auto vote = request && request->IsCancelable() ? request->Defer() : nullptr;
+          native_event_delivery_t delivery = 0;
+          try {
+            auto payload = std::shared_ptr<native_application_event_t>(new native_application_event_t{}, [](native_application_event_t* value) { free_c_application_event(value); delete value; });
+            if (!to_c_application_event(event, payload.get())) { if (request) request->Cancel(); return; }
+            auto* event_pointer = payload.get();
+            auto lease = std::make_shared<nativeapi::capi::EventDelivery>(registration->context, std::move(payload), std::move(vote));
+            delivery = nativeapi::HandleTable::GetInstance().Insert(lease);
+            callback(event_pointer, delivery, registration->context->holder->get());
+          } catch (...) {
+            if (request) request->Cancel();
+            if (delivery) native_event_delivery_complete(delivery, false);
+          }
+        }, registration->context->active));
+  } catch (...) {
+    return 0;
+  }
+}
+
+bool native_application_remove_listener(native_listener_id_t listener_id) {
+  try {
+    return nativeapi::Application::GetInstance().RemoveListener(static_cast<size_t>(listener_id));
+  } catch (...) {
+    return false;
+  }
+}
+
+bool to_c_application_event(const nativeapi::ApplicationEvent& event, native_application_event_t* out) {
+  if (!out) {
+    return false;
+  }
+  *out = native_application_event_t{};
+  if (const auto* typed = dynamic_cast<const nativeapi::ApplicationStartedEvent*>(&event)) {
+    out->type = NATIVE_APPLICATION_EVENT_TYPE_STARTED;
+    (void)typed;
+    return true;
+  }
+  if (const auto* typed = dynamic_cast<const nativeapi::ApplicationExitingEvent*>(&event)) {
+    out->type = NATIVE_APPLICATION_EVENT_TYPE_EXITING;
+    out->data.exiting.exit_code = typed->GetExitCode();
+    return true;
+  }
+  if (const auto* typed = dynamic_cast<const nativeapi::ApplicationActivatedEvent*>(&event)) {
+    out->type = NATIVE_APPLICATION_EVENT_TYPE_ACTIVATED;
+    (void)typed;
+    return true;
+  }
+  if (const auto* typed = dynamic_cast<const nativeapi::ApplicationDeactivatedEvent*>(&event)) {
+    out->type = NATIVE_APPLICATION_EVENT_TYPE_DEACTIVATED;
+    (void)typed;
+    return true;
+  }
+  if (const auto* typed = dynamic_cast<const nativeapi::ApplicationQuitRequestedEvent*>(&event)) {
+    out->type = NATIVE_APPLICATION_EVENT_TYPE_QUIT_REQUESTED;
+    out->data.quit_requested.request = nativeapi::HandleTable::GetInstance().Insert(typed->GetRequest());
+    return true;
+  }
+  return false;
+}
+
+void free_c_application_event(native_application_event_t* value) {
+  if (!value) {
+    return;
+  }
+  if (value->type == NATIVE_APPLICATION_EVENT_TYPE_QUIT_REQUESTED) {
+    nativeapi::HandleTable::GetInstance().Release(value->data.quit_requested.request);
+    value->data.quit_requested.request = 0;
+  }
+}
+

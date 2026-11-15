@@ -40,11 +40,8 @@ class DynamicsDataModel {
     return title ?? '';
   }
 
-  static RegExp banWordForDyn = RegExp(
-    Pref.parseBanWordToRegex(Pref.banWordForDyn),
-    caseSensitive: false,
-  );
-  static bool enableFilter = banWordForDyn.pattern.isNotEmpty;
+  static List<RegExp> banWordForDyn = Pref.compileBanWord(Pref.banWordForDyn);
+  static bool enableFilter = banWordForDyn.isNotEmpty;
 
   static bool antiGoodsDyn = Pref.antiGoodsDyn;
   static bool removeBlockedDyn = Pref.removeBlockedDyn;
@@ -215,6 +212,7 @@ class ItemModulesModel {
   List<ArticleContentModel>? moduleContent;
   ModuleBlocked? moduleBlocked;
   ModuleFold? moduleFold;
+  ModuleTribee? moduleTribee;
 
   static bool showDynDispute = Pref.showDynDispute;
   static bool showDynInteraction = Pref.showDynInteraction;
@@ -290,8 +288,41 @@ class ItemModulesModel {
               ? null
               : ModuleStatModel.fromJson(i['module_stat']);
           break;
+        case 'MODULE_TYPE_TRIBEE':
+          moduleTribee = i['module_tribee'] == null
+              ? null
+              : ModuleTribee.fromJson(i['module_tribee']);
+          break;
       }
     }
+  }
+}
+
+class ModuleTribee {
+  List<Tribee>? items;
+
+  ModuleTribee.fromJson(Map<String, dynamic> json) {
+    items = (json['items'] as List?)?.map((e) => Tribee.fromJson(e)).toList();
+  }
+}
+
+class Tribee {
+  String? tribeeId;
+  String? name;
+  String? suffix;
+  String? faceUrl;
+  String? jumpUrl;
+  String? dynCountText;
+  String? latestTimeText;
+
+  Tribee.fromJson(Map<String, dynamic> json) {
+    tribeeId = json['tribee_id'];
+    name = json['name'];
+    suffix = json['suffix'];
+    faceUrl = json['face_url'];
+    jumpUrl = json['jump_url'];
+    dynCountText = json['dyn_count_text'];
+    latestTimeText = json['latest_time_text'];
   }
 }
 

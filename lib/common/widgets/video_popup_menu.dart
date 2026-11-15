@@ -85,7 +85,7 @@ class VideoPopupMenu extends StatelessWidget {
   void _appendKeyword({
     required String key,
     required String value,
-    required void Function(RegExp) applyRegex,
+    required void Function(List<RegExp>) applyRegex,
     required String successMsg,
   }) {
     final keyword = value.trim();
@@ -95,18 +95,12 @@ class VideoPopupMenu extends StatelessWidget {
     }
     final escapedKeyword = RegExp.escape(keyword);
     final stored = GStorage.setting.get(key, defaultValue: '') as String;
-    final items = stored
-        .split('\n')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final items = Pref.parseBanWordItems(stored);
     if (!items.contains(escapedKeyword)) {
       items.add(escapedKeyword);
       final joined = items.join('\n');
       GStorage.setting.put(key, joined);
-      applyRegex(
-        RegExp(Pref.parseBanWordToRegex(joined), caseSensitive: false),
-      );
+      applyRegex(Pref.compileBanWord(joined));
       SmartDialog.showToast(successMsg);
       onRemove?.call();
       return;
@@ -218,7 +212,7 @@ class VideoPopupMenu extends StatelessWidget {
                     value: title,
                     applyRegex: (value) {
                       RecommendFilter.rcmdRegExp = value;
-                      RecommendFilter.enableFilter = value.pattern.isNotEmpty;
+                      RecommendFilter.enableFilter = value.isNotEmpty;
                     },
                     successMsg: '已加入标题关键词屏蔽',
                   );
@@ -237,7 +231,7 @@ class VideoPopupMenu extends StatelessWidget {
                   value: zoneName!,
                   applyRegex: (value) {
                     VideoHttp.zoneRegExp = value;
-                    VideoHttp.enableFilter = value.pattern.isNotEmpty;
+                    VideoHttp.enableFilter = value.isNotEmpty;
                   },
                   successMsg: '已加入频道关键词屏蔽',
                 );

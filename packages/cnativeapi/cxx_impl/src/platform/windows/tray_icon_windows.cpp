@@ -1,0 +1,611 @@
+// clang-format off
+#include <windows.h>
+#include <shellapi.h>
+// clang-format on
+#include <functional>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+
+#include "../../foundation/geometry.h"
+#include "../../foundation/id_allocator.h"
+#include "../../image.h"
+#include "../../menu.h"
+#include "../../positioning_strategy.h"
+#include "../../tray_icon.h"
+#include "../../view.h"
+#include "dpi_utils_windows.h"
+#include "string_utils_windows.h"
+#include "window_message_dispatcher.h"
+
+namespace nativeapi {
+
+// Forward declaration for Windows-specific helper function from
+// image_windows.cpp
+HICON ImageToHICON(const Image* image, int width, int height);
+HICON ImageToTemplateHICON(const Image* image, int width, int height, COLORREF foreground);
+
+namespace {
+
+// The message the shell posts to the icon's window. Every icon on the shared
+// host window uses it and tells them apart by wParam (NOTIFYICONDATA::uID).
+constexpr UINT kTrayCallbackMessage = WM_USER + 1;
+
+COLORREF TrayForeground() {
+  HIGHCONTRASTW contrast = {};
+  contrast.cbSize = sizeof(contrast);
+  if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+      (contrast.dwFlags & HCF_HIGHCONTRASTON)) {
+    return GetSysColor(COLOR_WINDOWTEXT);
+  }
+  DWORD light = 1;
+  DWORD size = sizeof(light);
+  RegGetValueW(HKEY_CURRENT_USER,
+               L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+               L"SystemUsesLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+  return light ? RGB(0, 0, 0) : RGB(255, 255, 255);
+}
+
+// Tells tray icons when the taskbar has been created again. Explorer forgets
+// every notification icon when it restarts and announces the new taskbar by
+// broadcasting the registered "TaskbarCreated" message. The shared host window
+// cannot hear it: it is message-only, and broadcasts skip message-only windows.
+// So this keeps a hidden top-level window of its own, on the thread that
+// created the first tray icon.
+class TaskbarRestartWatcher {
+ public:
+  static TaskbarRestartWatcher& GetInstance() {
+    static TaskbarRestartWatcher instance;
+    return instance;
+  }
+
+  int Add(std::function<void(bool)> on_taskbar_created) {
+    EnsureWindow();
+    int id = next_id_++;
+    callbacks_[id] = std::move(on_taskbar_created);
+    return id;
+  }
+
+  void Remove(int id) { callbacks_.erase(id); }
+
+ private:
+  TaskbarRestartWatcher() = default;
+
+  void EnsureWindow() {
+    if (hwnd_) {
+      return;
+    }
+    taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
+
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    const wchar_t* class_name = L"NativeAPITaskbarRestartWatcher";
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = instance;
+    wc.lpszClassName = class_name;
+    RegisterClassW(&wc);  // Fails harmlessly when the class already exists
+
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, class_name, L"", WS_POPUP, 0, 0, 0, 0, nullptr,
+                            nullptr, instance, nullptr);
+    if (hwnd_ && taskbar_created_message_ != 0) {
+      // An elevated process does not get broadcasts from the (unelevated) shell
+      // unless it opts in.
+      ChangeWindowMessageFilterEx(hwnd_, taskbar_created_message_, MSGFLT_ALLOW, nullptr);
+    }
+    // The theme broadcasts come from whichever process changed the setting, so
+    // an elevated application has to let them through as well; otherwise its
+    // template icons keep the old foreground colour after a theme change.
+    if (hwnd_) {
+      ChangeWindowMessageFilterEx(hwnd_, WM_SETTINGCHANGE, MSGFLT_ALLOW, nullptr);
+      ChangeWindowMessageFilterEx(hwnd_, WM_SYSCOLORCHANGE, MSGFLT_ALLOW, nullptr);
+    }
+  }
+
+  static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    TaskbarRestartWatcher& self = GetInstance();
+    const bool restarted =
+        self.taskbar_created_message_ != 0 && message == self.taskbar_created_message_;
+    if (restarted || message == WM_SETTINGCHANGE || message == WM_THEMECHANGED ||
+        message == WM_SYSCOLORCHANGE) {
+      // Copy: a callback may add or remove tray icons.
+      auto callbacks = self.callbacks_;
+      for (auto& entry : callbacks) {
+        if (self.callbacks_.count(entry.first)) {
+          entry.second(restarted);
+        }
+      }
+      return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+  }
+
+  HWND hwnd_ = nullptr;
+  UINT taskbar_created_message_ = 0;
+  int next_id_ = 1;
+  std::unordered_map<int, std::function<void(bool)>> callbacks_;
+};
+
+}  // namespace
+
+// Private implementation class
+class TrayIcon::Impl {
+ public:
+  std::string identifier_;
+  std::shared_ptr<Image> image_;
+  bool icon_template_ = false;
+  Size icon_size_ = Size{18, 18};
+  TrayIconPosition icon_position_ = TrayIconPosition::Left;
+  std::shared_ptr<View> content_view_;
+
+  // Callback function types
+  using ClickedCallback = std::function<void(TrayIconId)>;
+  using RightClickedCallback = std::function<void(TrayIconId)>;
+  using DoubleClickedCallback = std::function<void(TrayIconId)>;
+
+  Impl()
+      : hwnd_(nullptr),
+        icon_handle_(nullptr),
+        window_proc_handle_id_(-1),
+        event_monitoring_setup_(false),
+        context_menu_trigger_(ContextMenuTrigger::None) {
+    tray_icon_id_ = IdAllocator::Allocate<TrayIcon>();
+  }
+
+  Impl(HWND hwnd,
+       ClickedCallback clicked_callback,
+       RightClickedCallback right_clicked_callback,
+       DoubleClickedCallback double_clicked_callback)
+      : hwnd_(hwnd),
+        icon_handle_(nullptr),
+        window_proc_handle_id_(-1),
+        clicked_callback_(std::move(clicked_callback)),
+        right_clicked_callback_(std::move(right_clicked_callback)),
+        double_clicked_callback_(std::move(double_clicked_callback)),
+        event_monitoring_setup_(false),
+        context_menu_trigger_(ContextMenuTrigger::None) {
+    tray_icon_id_ = IdAllocator::Allocate<TrayIcon>();
+    // Initialize NOTIFYICONDATA structure
+    ZeroMemory(&nid_, sizeof(NOTIFYICONDATAW));
+    nid_.cbSize = sizeof(NOTIFYICONDATAW);
+    nid_.hWnd = hwnd_;
+    nid_.uID = static_cast<UINT>(tray_icon_id_);  // Use tray_icon_id_ directly
+    nid_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid_.uCallbackMessage = kTrayCallbackMessage;
+
+    // The shell runs at a lower integrity level than an elevated application,
+    // so User Interface Privilege Isolation drops the callback message on its
+    // way in unless the window opts in. Without this an elevated application's
+    // icon is visible but dead to clicks.
+    ChangeWindowMessageFilterEx(hwnd_, kTrayCallbackMessage, MSGFLT_ALLOW, nullptr);
+
+    taskbar_watch_id_ = TaskbarRestartWatcher::GetInstance().Add([this](bool restarted) {
+      if (icon_template_)
+        UpdateIcon();
+      if (restarted)
+        RestoreAfterTaskbarRestart();
+    });
+
+    // Event monitoring will be set up when first listener is added
+    // via StartEventListening() override
+  }
+
+  ~Impl() {
+    if (taskbar_watch_id_ != 0) {
+      TaskbarRestartWatcher::GetInstance().Remove(taskbar_watch_id_);
+    }
+
+    // Clean up event monitoring if it was set up
+    if (event_monitoring_setup_) {
+      CleanupEventMonitoring();
+    }
+
+    if (hwnd_) {
+      Shell_NotifyIconW(NIM_DELETE, &nid_);
+      // Note: We don't destroy the shared host window
+    }
+    if (icon_handle_) {
+      DestroyIcon(icon_handle_);
+    }
+  }
+
+  // The new taskbar knows nothing about this icon. nid_ still carries the icon,
+  // tooltip and callback message, so adding it again restores everything.
+  void RestoreAfterTaskbarRestart() {
+    if (hwnd_ && registered_) {
+      NOTIFYICONDATAW nid = nid_;
+      nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE;
+      nid.dwState = visible_ ? 0 : NIS_HIDDEN;
+      nid.dwStateMask = NIS_HIDDEN;
+      Shell_NotifyIconW(NIM_ADD, &nid);
+    }
+  }
+
+  // Registers the icon with the shell once an image is available. It goes in
+  // hidden when it was not shown yet. An icon that is added later, after another
+  // one was deleted, can end up visible but deaf to clicks when the process runs
+  // elevated (tray_manager#110), so every icon is registered up front and
+  // visibility is only ever toggled afterwards.
+  void Register() {
+    if (!hwnd_ || registered_)
+      return;
+    if (!nid_.hIcon) {
+      HICON fallback = CopyIcon(LoadIcon(nullptr, IDI_APPLICATION));
+      if (!fallback)
+        return;
+      icon_handle_ = fallback;
+      nid_.hIcon = fallback;
+    }
+    NOTIFYICONDATAW nid = nid_;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE;
+    nid.dwState = visible_ ? 0 : NIS_HIDDEN;
+    nid.dwStateMask = NIS_HIDDEN;
+    registered_ = Shell_NotifyIconW(NIM_ADD, &nid) == TRUE;
+  }
+
+  // Shows or hides an icon that is already registered. Setting NIS_HIDDEN keeps
+  // the shell entry (and its callback) alive, unlike NIM_DELETE.
+  bool ApplyVisibility() {
+    if (!registered_)
+      return false;
+    NOTIFYICONDATAW nid = nid_;
+    nid.uFlags = NIF_STATE;
+    nid.dwState = visible_ ? 0 : NIS_HIDDEN;
+    nid.dwStateMask = NIS_HIDDEN;
+    return Shell_NotifyIconW(NIM_MODIFY, &nid) == TRUE;
+  }
+
+  void UpdateIcon() {
+    if (!hwnd_)
+      return;
+    HICON icon = nullptr;
+    if (image_) {
+      const int width = GetSystemMetrics(SM_CXSMICON);
+      const int height = GetSystemMetrics(SM_CYSMICON);
+      icon = icon_template_ ? ImageToTemplateHICON(image_.get(), width, height, TrayForeground())
+                            : ImageToHICON(image_.get(), width, height);
+    }
+    if (!icon)
+      icon = CopyIcon(LoadIcon(nullptr, IDI_APPLICATION));
+    if (!icon)
+      return;
+    HICON previous = icon_handle_;
+    icon_handle_ = icon;
+    nid_.hIcon = icon;
+    if (!registered_) {
+      Register();
+    } else {
+      nid_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+      Shell_NotifyIconW(NIM_MODIFY, &nid_);
+    }
+    if (previous)
+      DestroyIcon(previous);
+  }
+
+  // Handle window procedure delegate
+  std::optional<LRESULT> HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == kTrayCallbackMessage && wparam == static_cast<WPARAM>(tray_icon_id_)) {
+      if (lparam == WM_LBUTTONUP) {
+        std::cout << "TrayIcon: Left button clicked, tray_icon_id = " << tray_icon_id_ << std::endl;
+        // Call clicked callback
+        if (clicked_callback_) {
+          clicked_callback_(tray_icon_id_);
+        }
+      } else if (lparam == WM_RBUTTONUP) {
+        std::cout << "TrayIcon: Right button clicked, tray_icon_id = " << tray_icon_id_
+                  << std::endl;
+        // Call right clicked callback
+        if (right_clicked_callback_) {
+          right_clicked_callback_(tray_icon_id_);
+        }
+      } else if (lparam == WM_LBUTTONDBLCLK) {
+        std::cout << "TrayIcon: Left button double-clicked, tray_icon_id = " << tray_icon_id_
+                  << std::endl;
+        // Call double clicked callback
+        if (double_clicked_callback_) {
+          double_clicked_callback_(tray_icon_id_);
+        }
+      }
+      return 0;
+    }
+    return std::nullopt;  // Let default window procedure handle it
+  }
+
+  void SetupEventMonitoring() {
+    if (event_monitoring_setup_) {
+      return;  // Already set up
+    }
+
+    if (!hwnd_) {
+      return;
+    }
+
+    // Register window procedure handler
+    window_proc_handle_id_ = WindowMessageDispatcher::GetInstance().RegisterHandler(
+        hwnd_, [this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+          return HandleWindowProc(hwnd, message, wparam, lparam);
+        });
+
+    event_monitoring_setup_ = true;
+  }
+
+  void CleanupEventMonitoring() {
+    if (!event_monitoring_setup_) {
+      return;  // Not set up
+    }
+
+    // Unregister window procedure handler
+    if (window_proc_handle_id_ != -1) {
+      WindowMessageDispatcher::GetInstance().UnregisterHandler(window_proc_handle_id_);
+      window_proc_handle_id_ = -1;
+    }
+
+    event_monitoring_setup_ = false;
+  }
+
+  int window_proc_handle_id_;
+  HWND hwnd_;
+  NOTIFYICONDATAW nid_;
+  std::shared_ptr<Menu> context_menu_;
+  HICON icon_handle_;
+  TrayIconId tray_icon_id_;
+  bool event_monitoring_setup_;
+  ContextMenuTrigger context_menu_trigger_;
+  // What SetVisible() last asked for; the shell's own answer is lost when
+  // Explorer restarts.
+  bool visible_ = false;
+  // Whether the shell currently holds this icon (shown or hidden).
+  bool registered_ = false;
+  int taskbar_watch_id_ = 0;
+
+  // Callback functions for event emission
+  ClickedCallback clicked_callback_;
+  RightClickedCallback right_clicked_callback_;
+  DoubleClickedCallback double_clicked_callback_;
+};
+
+TrayIcon::TrayIcon() : TrayIcon(nullptr) {}
+
+TrayIcon::TrayIcon(const std::string& identifier) : TrayIcon(nullptr) {
+  pimpl_->identifier_ = identifier;
+}
+
+TrayIcon::TrayIcon(void* native_tray_icon) {
+  HWND hwnd = nullptr;
+
+  if (native_tray_icon == nullptr) {
+    // Use the shared host window from WindowMessageDispatcher
+    hwnd = WindowMessageDispatcher::GetInstance().GetHostWindow();
+  } else {
+    // Wrap existing native tray icon
+    // In a real implementation, you'd extract HWND from the tray parameter
+    // For now, this is mainly used by TrayManager for creating uninitialized
+    // icons
+  }
+
+  // Initialize the Impl with the window handle
+  // The tray_icon_id will be allocated inside Impl constructor
+  if (hwnd) {
+    // Create callback functions that emit events
+    auto clicked_callback = [this](TrayIconId id) {
+      this->Emit<TrayIconClickedEvent>(id);
+      // Auto-trigger context menu if configured
+      if (pimpl_ && pimpl_->context_menu_trigger_ == ContextMenuTrigger::Clicked) {
+        this->OpenContextMenu();
+      }
+    };
+
+    auto right_clicked_callback = [this](TrayIconId id) {
+      this->Emit<TrayIconRightClickedEvent>(id);
+      // Auto-trigger context menu if configured
+      if (pimpl_ && pimpl_->context_menu_trigger_ == ContextMenuTrigger::RightClicked) {
+        this->OpenContextMenu();
+      }
+    };
+
+    auto double_clicked_callback = [this](TrayIconId id) {
+      this->Emit<TrayIconDoubleClickedEvent>(id);
+      // Auto-trigger context menu if configured
+      if (pimpl_ && pimpl_->context_menu_trigger_ == ContextMenuTrigger::DoubleClicked) {
+        this->OpenContextMenu();
+      }
+    };
+
+    pimpl_ =
+        std::make_unique<Impl>(hwnd, std::move(clicked_callback), std::move(right_clicked_callback),
+                               std::move(double_clicked_callback));
+  } else {
+    // Failed to create window, create uninitialized Impl
+    pimpl_ = std::make_unique<Impl>();
+  }
+}
+
+TrayIcon::~TrayIcon() {}
+
+void TrayIcon::StartEventListening() {
+  // Called automatically when first listener is added
+  // Set up platform event monitoring
+  pimpl_->SetupEventMonitoring();
+}
+
+void TrayIcon::StopEventListening() {
+  // Called automatically when last listener is removed
+  // Clean up platform event monitoring
+  pimpl_->CleanupEventMonitoring();
+}
+
+TrayIconId TrayIcon::GetId() {
+  return pimpl_->tray_icon_id_;
+}
+
+std::string TrayIcon::GetIdentifier() const {
+  return pimpl_->identifier_;
+}
+
+void TrayIcon::SetIcon(std::shared_ptr<Image> image) {
+  pimpl_->image_ = std::move(image);
+  pimpl_->UpdateIcon();
+}
+
+std::shared_ptr<Image> TrayIcon::GetIcon() const {
+  return pimpl_->image_;
+}
+
+void TrayIcon::SetIconTemplate(bool is_icon_template) {
+  pimpl_->icon_template_ = is_icon_template;
+  pimpl_->UpdateIcon();
+}
+
+bool TrayIcon::IsIconTemplate() const {
+  return pimpl_->icon_template_;
+}
+
+void TrayIcon::SetIconSize(Size size) {
+  // Recorded only: the notification area dictates the icon size.
+  pimpl_->icon_size_ = size;
+}
+
+Size TrayIcon::GetIconSize() const {
+  return pimpl_->icon_size_;
+}
+
+void TrayIcon::SetIconPosition(TrayIconPosition position) {
+  // Recorded only: Windows tray icons have no title.
+  pimpl_->icon_position_ = position;
+}
+
+TrayIconPosition TrayIcon::GetIconPosition() const {
+  return pimpl_->icon_position_;
+}
+
+void TrayIcon::SetContentView(std::shared_ptr<View> view) {
+  // Recorded only: the notification area shows only an icon.
+  pimpl_->content_view_ = std::move(view);
+}
+
+std::shared_ptr<View> TrayIcon::GetContentView() const {
+  return pimpl_->content_view_;
+}
+
+void TrayIcon::SetTitle(std::optional<std::string> title) {
+  (void)title;  // Unused on Windows
+  // Windows tray icons don't support title
+}
+
+std::optional<std::string> TrayIcon::GetTitle() {
+  // Windows tray icons don't support title
+  return std::nullopt;
+}
+
+void TrayIcon::SetTooltip(std::optional<std::string> tooltip) {
+  if (pimpl_->hwnd_) {
+    std::string tooltip_str = tooltip.has_value() ? *tooltip : "";
+    std::wstring wtooltip = StringToWString(tooltip_str);
+    wcsncpy_s(pimpl_->nid_.szTip, _countof(pimpl_->nid_.szTip), wtooltip.c_str(), _TRUNCATE);
+
+    // Update if the shell knows the icon (shown or hidden).
+    if (pimpl_->registered_) {
+      Shell_NotifyIconW(NIM_MODIFY, &pimpl_->nid_);
+    }
+  }
+}
+
+std::optional<std::string> TrayIcon::GetTooltip() {
+  if (pimpl_->hwnd_ && pimpl_->nid_.szTip[0] != L'\0') {
+    return WCharArrayToString(pimpl_->nid_.szTip);
+  }
+  return std::nullopt;
+}
+
+void TrayIcon::SetContextMenu(std::shared_ptr<Menu> menu) {
+  pimpl_->context_menu_ = menu;
+}
+
+std::shared_ptr<Menu> TrayIcon::GetContextMenu() {
+  return pimpl_->context_menu_;
+}
+
+Rectangle TrayIcon::GetBounds() {
+  Rectangle bounds = {0, 0, 0, 0};
+
+  if (pimpl_->hwnd_ && IsVisible()) {
+    RECT rect;
+    NOTIFYICONIDENTIFIER niid = {};
+    niid.cbSize = sizeof(NOTIFYICONIDENTIFIER);
+    niid.hWnd = pimpl_->hwnd_;
+    niid.uID = static_cast<UINT>(pimpl_->tray_icon_id_);
+
+    // Get the rectangle of the notification icon
+    if (Shell_NotifyIconGetRect(&niid, &rect) == S_OK) {
+      // In the screen coordinates windows are placed with, so that a popup
+      // window can be put next to the icon.
+      bounds = PhysicalToLogicalRect(
+          rect, GetScaleFactorForMonitor(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST)));
+    }
+  }
+
+  return bounds;
+}
+
+bool TrayIcon::SetVisible(bool visible) {
+  if (!pimpl_->hwnd_) {
+    return false;
+  }
+
+  // Recorded even when the call below fails (no taskbar at the moment), so the
+  // icon comes back once a taskbar exists.
+  pimpl_->visible_ = visible;
+
+  if (pimpl_->registered_) {
+    return pimpl_->ApplyVisibility();
+  }
+  pimpl_->Register();
+  return pimpl_->registered_;
+}
+
+bool TrayIcon::IsVisible() {
+  if (!pimpl_->hwnd_) {
+    return false;
+  }
+
+  // Check if the tray icon is visible by querying its bounds
+  NOTIFYICONIDENTIFIER niid = {};
+  niid.cbSize = sizeof(NOTIFYICONIDENTIFIER);
+  niid.hWnd = pimpl_->hwnd_;
+  niid.uID = static_cast<UINT>(pimpl_->tray_icon_id_);
+
+  RECT rect;
+  return Shell_NotifyIconGetRect(&niid, &rect) == S_OK;
+}
+
+bool TrayIcon::OpenContextMenu() {
+  if (!pimpl_->context_menu_) {
+    return false;
+  }
+
+  return pimpl_->context_menu_->Open(PositioningStrategy::CursorPosition());
+}
+
+bool TrayIcon::CloseContextMenu() {
+  if (!pimpl_->context_menu_) {
+    return true;  // No menu to close, consider success
+  }
+
+  // Close the context menu
+  return pimpl_->context_menu_->Close();
+}
+
+void TrayIcon::SetContextMenuTrigger(ContextMenuTrigger trigger) {
+  pimpl_->context_menu_trigger_ = trigger;
+}
+
+ContextMenuTrigger TrayIcon::GetContextMenuTrigger() {
+  return pimpl_->context_menu_trigger_;
+}
+
+void* TrayIcon::GetNativeObjectInternal() const {
+  return reinterpret_cast<void*>(static_cast<uintptr_t>(pimpl_->tray_icon_id_));
+}
+
+}  // namespace nativeapi

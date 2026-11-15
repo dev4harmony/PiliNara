@@ -70,9 +70,9 @@ void showReplyCopyDialog(
                     state.hideToolbar();
                     final escapedText = RegExp.escape(selected);
                     final currentStored = Pref.banWordForReply;
-                    final existingKeywords = currentStored.isEmpty
-                        ? <String>[]
-                        : currentStored.split('\n');
+                    final existingKeywords = Pref.parseBanWordItems(
+                      currentStored,
+                    );
                     if (existingKeywords.contains(escapedText)) {
                       SmartDialog.showToast('该关键词已在过滤列表中');
                       return;
@@ -88,18 +88,15 @@ void showReplyCopyDialog(
                         ),
                       ),
                       onConfirm: () {
-                        final newStored = currentStored.isEmpty
-                            ? escapedText
-                            : '$currentStored\n$escapedText';
+                        final newStored = [
+                          ...existingKeywords,
+                          escapedText,
+                        ].join('\n');
                         GStorage.setting.put(
                           SettingBoxKey.banWordForReply,
                           newStored,
                         );
-                        final newPattern = Pref.parseBanWordToRegex(newStored);
-                        ReplyGrpc.replyRegExp = RegExp(
-                          newPattern,
-                          caseSensitive: true,
-                        );
+                        ReplyGrpc.replyRegExp = Pref.compileBanWord(newStored);
                         ReplyGrpc.enableFilter = true;
                         SmartDialog.showToast('已保存');
                       },
