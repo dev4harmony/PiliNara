@@ -17,7 +17,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # update when release
-version: 2.1.6+7021
+version: 2.6.2+7021
 
 # 鸿蒙 SDK 使用 CPF-Flutter/flutter_flutter 的 oh-3.47.9-dev 分支，
 # 该分支自报版本为 3.47.7（code_assets 等已被其打过 ohos 补丁），
