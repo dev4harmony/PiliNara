@@ -396,10 +396,10 @@ class _MarqueeSimulation extends Simulation {
   bool isDone(double timeInSeconds) => false;
 
   _MarqueeSimulation copyWith({
-    final double? initialValue,
-    final double? addSize,
-    final bool? notBounce,
-    final double? velocity,
+    double? initialValue,
+    double? addSize,
+    bool? notBounce,
+    double? velocity,
   }) => _MarqueeSimulation(
     initialValue ?? this.initialValue,
     addSize == null ? size : size + addSize,

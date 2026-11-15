@@ -1,0 +1,1204 @@
+#include "../../window_close_dispatch.h"
+#include <windows.h>
+#include <commctrl.h>
+#include <atomic>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <dwmapi.h>
+#include <psapi.h>
+#include <cmath>
+#include "../../window.h"
+#include "../../window_manager.h"
+#include "../../window_property_dispatch.h"
+#include "../../window_registry.h"
+#include "dpi_utils_windows.h"
+#include "string_utils_windows.h"
+#include "ui_thread_windows.h"
+
+#pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+namespace nativeapi {
+
+// Property name for storing window ID in HWND (must match window_windows.cpp)
+static const wchar_t* kWindowIdProperty = L"NativeAPIWindowId";
+
+// Helper function to get window ID from HWND
+// First tries to read from custom property, then creates Window object if needed
+static WindowId GetWindowIdFromHwnd(HWND hwnd) {
+  if (!hwnd) {
+    return IdAllocator::kInvalidId;
+  }
+
+  // First, try to get window ID from HWND's custom property. A window can carry
+  // an ID without being registered (created by Window(), or wrapped by a
+  // binding), so make sure WindowManager::Get() can find it either way.
+  HANDLE prop_handle = GetPropW(hwnd, kWindowIdProperty);
+  if (prop_handle) {
+    WindowId window_id = static_cast<WindowId>(reinterpret_cast<uintptr_t>(prop_handle));
+    if (window_id != IdAllocator::kInvalidId && window_id != 0) {
+      if (!WindowRegistry::GetInstance().Get(window_id)) {
+        WindowRegistry::GetInstance().Add(window_id, std::make_shared<Window>(hwnd));
+      }
+      return window_id;
+    }
+  }
+
+  // If property doesn't exist, create a new Window object and register it
+  // Use shared_ptr so it can be properly registered in WindowRegistry
+  auto window = std::make_shared<Window>(hwnd);
+  WindowId window_id = window->GetId();
+
+  // Register the window manually since constructor's shared_from_this() fails
+  // during construction (shared_ptr control block not fully initialized yet)
+  if (window_id != IdAllocator::kInvalidId) {
+    WindowRegistry::GetInstance().Add(window_id, window);
+  }
+
+  return window_id;
+}
+
+namespace {
+
+// The observation below is installed on, and delivered by, the thread that owns
+// this process's windows (see ui_thread_windows.h). WindowManager itself is a
+// singleton destroyed at exit on whichever thread gets there first, and the
+// teardown is marshaled to that thread, so every callback goes through this guard:
+// it keeps a callback from reaching an Impl that is already gone, and makes the
+// destroyer wait for a callback that is already inside.
+static std::recursive_mutex g_observer_mutex;
+static std::shared_ptr<std::atomic<bool>> g_observer_lifetime;
+
+// Runs |fn| while the observer is alive. Callbacks from several sources (WinEvents,
+// the geometry subclass, a full-screen change reported by a setter) are serialized
+// by the lock, and the Win32 work below them is not re-entered.
+template <typename Fn>
+static void WithObserver(Fn fn) {
+  std::lock_guard<std::recursive_mutex> lock(g_observer_mutex);
+  if (!g_observer_lifetime || !g_observer_lifetime->load()) {
+    return;
+  }
+  fn();
+}
+
+// Foreground-change tracking for WindowFocusedEvent / WindowBlurredEvent.
+// The hook is system-wide because a window of this process loses focus exactly
+// when some *other* process's window becomes foreground; a process-scoped hook
+// would never report that transition. Foreign windows are filtered out below,
+// so no window ids are ever allocated for them.
+static HWINEVENTHOOK g_foreground_hook = nullptr;
+static HWND g_focused_hwnd = nullptr;
+
+// The WinEvent callback is a free function and cannot name the private
+// WindowManager::Impl, so it dispatches through this trampoline, installed by
+// Impl::InstallObservation().
+using ForegroundChangedFn = void (*)(void* impl, HWND hwnd);
+static ForegroundChangedFn g_foreground_changed_fn = nullptr;
+static void* g_foreground_changed_context = nullptr;
+
+static bool IsOwnProcessWindow(HWND hwnd) {
+  if (!hwnd) {
+    return false;
+  }
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(hwnd, &process_id);
+  return process_id == GetCurrentProcessId();
+}
+
+static void CALLBACK ForegroundEventProc(HWINEVENTHOOK hook,
+                                         DWORD event,
+                                         HWND hwnd,
+                                         LONG id_object,
+                                         LONG id_child,
+                                         DWORD event_thread,
+                                         DWORD event_time) {
+  (void)hook;
+  (void)event_thread;
+  (void)event_time;
+
+  if (event != EVENT_SYSTEM_FOREGROUND || id_object != OBJID_WINDOW || id_child != CHILDID_SELF ||
+      !hwnd) {
+    return;
+  }
+  WithObserver([&] {
+    if (g_foreground_changed_fn && g_foreground_changed_context) {
+      g_foreground_changed_fn(g_foreground_changed_context, hwnd);
+    }
+  });
+}
+
+// Geometry and show-state tracking for WindowMinimizedEvent, WindowMaximizedEvent,
+// WindowRestoredEvent, WindowMovedEvent and WindowResizedEvent. The windows are
+// usually owned by someone else (Flutter's runner, the host application), so
+// the library subclasses each one it reports on and reads WM_WINDOWPOSCHANGED,
+// which every change of a window's rectangle goes through, minimizing and
+// maximizing included. The snapshot kept per window tells which of the five
+// events a change amounts to.
+//
+// Not a WinEvent hook on EVENT_OBJECT_LOCATIONCHANGE: out-of-context WinEvents
+// are queued to this thread and delivered whenever it next reads a message —
+// in the middle of Flutter's resize, which pumps messages while it waits for a
+// frame of the new size, among other places — and the listeners called from
+// there (Dart ones synchronously) made every resize step late. The subclass
+// reports after the window's own procedure, and so Flutter, is done with it.
+struct WindowSnapshot {
+  bool minimized;
+  bool maximized;
+  RECT rect;
+};
+static HWINEVENTHOOK g_lifetime_hook = nullptr;
+static std::unordered_map<HWND, WindowSnapshot> g_window_snapshots;
+// Windows seen on screen, which is what WindowCreatedEvent and WindowClosedEvent
+// are about. The ID is kept because the destroy event is delivered after the
+// HWND, and the property holding its ID, are gone.
+static std::unordered_map<HWND, WindowId> g_shown_windows;
+
+using WindowChangedFn = void (*)(void* impl, DWORD event, HWND hwnd);
+static WindowChangedFn g_window_changed_fn = nullptr;
+static void* g_window_changed_context = nullptr;
+
+// Window::SetFullScreen() reports its changes here: Windows has no full-screen
+// window state of its own, so there is nothing to be notified about.
+using FullScreenChangedFn = void (*)(void* impl, HWND hwnd, bool is_full_screen);
+static FullScreenChangedFn g_full_screen_changed_fn = nullptr;
+static void* g_full_screen_changed_context = nullptr;
+
+}  // namespace
+
+// Declared in window_windows.cpp, hence outside the anonymous namespace.
+void NotifyWindowFullScreenChanged(HWND hwnd, bool is_full_screen) {
+  WithObserver([&] {
+    if (g_full_screen_changed_fn && g_full_screen_changed_context) {
+      g_full_screen_changed_fn(g_full_screen_changed_context, hwnd, is_full_screen);
+    }
+  });
+}
+
+namespace {
+
+// Top-level windows that a listener can make sense of: anything already known
+// to the library, otherwise what the user sees as a window. Tooltips, menus and
+// other helper windows move and resize as well and must not get an id for it.
+static bool IsReportableWindow(HWND hwnd) {
+  if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd) {
+    return false;
+  }
+  if (GetWindowLongPtr(hwnd, GWL_STYLE) & WS_CHILD) {
+    return false;
+  }
+  if (GetPropW(hwnd, kWindowIdProperty)) {
+    return true;
+  }
+  if (!IsWindowVisible(hwnd)) {
+    return false;
+  }
+  return !(GetWindowLongPtr(hwnd, GWL_EXSTYLE) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE));
+}
+
+static LRESULT CALLBACK
+WindowGeometryProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp, UINT_PTR subclass_id, DWORD_PTR) {
+  if (message == WM_NCDESTROY) {
+    RemoveWindowSubclass(hwnd, WindowGeometryProc, subclass_id);
+  } else if (message == WM_WINDOWPOSCHANGED) {
+    const LRESULT result = DefSubclassProc(hwnd, message, wp, lp);
+    WithObserver([&] {
+      if (g_window_changed_fn && g_window_changed_context) {
+        g_window_changed_fn(g_window_changed_context, EVENT_OBJECT_LOCATIONCHANGE, hwnd);
+      }
+    });
+    return result;
+  }
+  return DefSubclassProc(hwnd, message, wp, lp);
+}
+
+// Starts reporting geometry changes of `hwnd`. Only windows of the calling
+// thread can be subclassed; the others are tracked for creation and closing
+// only.
+static void WatchWindowGeometry(HWND hwnd) {
+  SetWindowSubclass(hwnd, WindowGeometryProc, reinterpret_cast<UINT_PTR>(&WindowGeometryProc), 0);
+}
+
+static void UnwatchWindowGeometry(HWND hwnd) {
+  RemoveWindowSubclass(hwnd, WindowGeometryProc, reinterpret_cast<UINT_PTR>(&WindowGeometryProc));
+}
+
+static void CALLBACK WindowChangedEventProc(HWINEVENTHOOK hook,
+                                            DWORD event,
+                                            HWND hwnd,
+                                            LONG id_object,
+                                            LONG id_child,
+                                            DWORD event_thread,
+                                            DWORD event_time) {
+  (void)hook;
+  (void)event_thread;
+  (void)event_time;
+
+  // OBJID_WINDOW leaves out the caret and the cursor, which report showing
+  // through the same event.
+  if (id_object != OBJID_WINDOW || id_child != CHILDID_SELF || !hwnd) {
+    return;
+  }
+  WithObserver([&] {
+    if (g_window_changed_fn && g_window_changed_context) {
+      g_window_changed_fn(g_window_changed_context, event, hwnd);
+    }
+  });
+}
+
+using PFN_ShowWindow = BOOL(WINAPI*)(HWND, int);
+using PFN_ShowWindowAsync = BOOL(WINAPI*)(HWND, int);
+
+static PFN_ShowWindow g_original_show_window = nullptr;
+static PFN_ShowWindowAsync g_original_show_window_async = nullptr;
+static bool g_hooks_installed = false;
+
+static bool IsShowCommand(int cmd) {
+  switch (cmd) {
+    case SW_SHOW:
+    case SW_SHOWNORMAL:
+    case SW_SHOWDEFAULT:
+    case SW_SHOWMAXIMIZED:
+    case SW_SHOWNOACTIVATE:
+    case SW_RESTORE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Intercept show/hide commands and invoke hooks if registered
+// Returns true if hook handled the operation (skip original implementation)
+static bool TryHandleWithHook(HWND hwnd, int cmd) {
+  WindowId window_id = GetWindowIdFromHwnd(hwnd);
+  if (window_id == IdAllocator::kInvalidId) {
+    return false;
+  }
+
+  auto& manager = WindowManager::GetInstance();
+
+  if (cmd == SW_HIDE && manager.HasWillHideHook()) {
+    manager.HandleWillHide(window_id);
+    return true;
+  }
+
+  if (IsShowCommand(cmd) && manager.HasWillShowHook()) {
+    manager.HandleWillShow(window_id);
+    return true;
+  }
+
+  return false;
+}
+
+static BOOL WINAPI HookedShowWindow(HWND hwnd, int nCmdShow) {
+  if (TryHandleWithHook(hwnd, nCmdShow)) {
+    return TRUE;
+  }
+
+  if (g_original_show_window) {
+    return g_original_show_window(hwnd, nCmdShow);
+  }
+
+  auto p = reinterpret_cast<PFN_ShowWindow>(
+      GetProcAddress(GetModuleHandleW(L"user32.dll"), "ShowWindow"));
+  return p ? p(hwnd, nCmdShow) : FALSE;
+}
+
+static BOOL WINAPI HookedShowWindowAsync(HWND hwnd, int nCmdShow) {
+  if (TryHandleWithHook(hwnd, nCmdShow)) {
+    return TRUE;
+  }
+
+  if (g_original_show_window_async) {
+    return g_original_show_window_async(hwnd, nCmdShow);
+  }
+
+  auto p = reinterpret_cast<PFN_ShowWindowAsync>(
+      GetProcAddress(GetModuleHandleW(L"user32.dll"), "ShowWindowAsync"));
+  return p ? p(hwnd, nCmdShow) : FALSE;
+}
+
+static bool CaseInsensitiveEquals(const char* a, const char* b) {
+  if (!a || !b)
+    return false;
+  while (*a && *b) {
+    char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+    char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+    if (ca != cb)
+      return false;
+    ++a;
+    ++b;
+  }
+  return *a == *b;
+}
+
+static void PatchIATInModule(HMODULE module,
+                             FARPROC target,
+                             FARPROC replacement,
+                             const char* func_name) {
+  if (!module)
+    return;
+
+  auto base = reinterpret_cast<BYTE*>(module);
+  auto dos = reinterpret_cast<PIMAGE_DOS_HEADER>(base);
+  if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
+    return;
+
+  auto nt = reinterpret_cast<PIMAGE_NT_HEADERS>(base + dos->e_lfanew);
+  if (!nt || nt->Signature != IMAGE_NT_SIGNATURE)
+    return;
+
+  auto& import_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  if (import_dir.VirtualAddress == 0)
+    return;
+
+  auto import_desc = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(base + import_dir.VirtualAddress);
+  for (; import_desc->Name != 0; ++import_desc) {
+    auto dll_name = reinterpret_cast<const char*>(base + import_desc->Name);
+    // Only hook USER32.dll to reduce risk
+    if (!dll_name)
+      continue;
+    if (!(CaseInsensitiveEquals(dll_name, "user32.dll")))
+      continue;
+
+    auto orig_thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(base + import_desc->OriginalFirstThunk);
+    auto thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(base + import_desc->FirstThunk);
+    if (!orig_thunk || !thunk)
+      continue;
+
+    for (; orig_thunk->u1.AddressOfData != 0; ++orig_thunk, ++thunk) {
+      if (IMAGE_SNAP_BY_ORDINAL(orig_thunk->u1.Ordinal)) {
+        continue;  // Skip ordinals
+      }
+      auto import = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(base + orig_thunk->u1.AddressOfData);
+      if (!import || !import->Name)
+        continue;
+      const char* name = reinterpret_cast<const char*>(import->Name);
+      if (!CaseInsensitiveEquals(name, func_name))
+        continue;
+
+      // Change protection and write new function pointer
+      DWORD old_protect;
+      if (VirtualProtect(&thunk->u1.Function, sizeof(void*), PAGE_READWRITE, &old_protect)) {
+        // Store original (first time only)
+        (void)target;  // target kept for symmetry; not used here
+        thunk->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
+        VirtualProtect(&thunk->u1.Function, sizeof(void*), old_protect, &old_protect);
+        FlushInstructionCache(GetCurrentProcess(), &thunk->u1.Function, sizeof(void*));
+      }
+    }
+  }
+}
+
+static void RestoreIATInModule(HMODULE module, FARPROC original, const char* func_name) {
+  if (!module || !original)
+    return;
+
+  auto base = reinterpret_cast<BYTE*>(module);
+  auto dos = reinterpret_cast<PIMAGE_DOS_HEADER>(base);
+  if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
+    return;
+
+  auto nt = reinterpret_cast<PIMAGE_NT_HEADERS>(base + dos->e_lfanew);
+  if (!nt || nt->Signature != IMAGE_NT_SIGNATURE)
+    return;
+
+  auto& import_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  if (import_dir.VirtualAddress == 0)
+    return;
+
+  auto import_desc = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(base + import_dir.VirtualAddress);
+  for (; import_desc->Name != 0; ++import_desc) {
+    auto dll_name = reinterpret_cast<const char*>(base + import_desc->Name);
+    if (!dll_name)
+      continue;
+    if (!(CaseInsensitiveEquals(dll_name, "user32.dll")))
+      continue;
+
+    auto orig_thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(base + import_desc->OriginalFirstThunk);
+    auto thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(base + import_desc->FirstThunk);
+    if (!orig_thunk || !thunk)
+      continue;
+
+    for (; orig_thunk->u1.AddressOfData != 0; ++orig_thunk, ++thunk) {
+      if (IMAGE_SNAP_BY_ORDINAL(orig_thunk->u1.Ordinal)) {
+        continue;
+      }
+      auto import = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(base + orig_thunk->u1.AddressOfData);
+      if (!import || !import->Name)
+        continue;
+      const char* name = reinterpret_cast<const char*>(import->Name);
+      if (!CaseInsensitiveEquals(name, func_name))
+        continue;
+
+      DWORD old_protect;
+      if (VirtualProtect(&thunk->u1.Function, sizeof(void*), PAGE_READWRITE, &old_protect)) {
+        thunk->u1.Function = reinterpret_cast<ULONG_PTR>(original);
+        VirtualProtect(&thunk->u1.Function, sizeof(void*), old_protect, &old_protect);
+        FlushInstructionCache(GetCurrentProcess(), &thunk->u1.Function, sizeof(void*));
+      }
+    }
+  }
+}
+
+static void ForEachProcessModule(std::function<void(HMODULE)> fn) {
+  HMODULE modules[1024];
+  DWORD bytes_needed = 0;
+  if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes_needed)) {
+    // Fallback: at least patch main module
+    fn(GetModuleHandle(nullptr));
+    return;
+  }
+  size_t count = bytes_needed / sizeof(HMODULE);
+  for (size_t i = 0; i < count; ++i) {
+    fn(modules[i]);
+  }
+}
+
+static void InstallHooks() {
+  if (g_hooks_installed)
+    return;
+
+  HMODULE user32 = GetModuleHandleW(L"user32.dll");
+  if (!user32)
+    user32 = LoadLibraryW(L"user32.dll");
+  if (!user32)
+    return;
+
+  g_original_show_window = reinterpret_cast<PFN_ShowWindow>(GetProcAddress(user32, "ShowWindow"));
+  g_original_show_window_async =
+      reinterpret_cast<PFN_ShowWindowAsync>(GetProcAddress(user32, "ShowWindowAsync"));
+  if (!g_original_show_window)
+    return;
+
+  ForEachProcessModule([](HMODULE m) {
+    PatchIATInModule(m, reinterpret_cast<FARPROC>(g_original_show_window),
+                     reinterpret_cast<FARPROC>(HookedShowWindow), "ShowWindow");
+    if (g_original_show_window_async) {
+      PatchIATInModule(m, reinterpret_cast<FARPROC>(g_original_show_window_async),
+                       reinterpret_cast<FARPROC>(HookedShowWindowAsync), "ShowWindowAsync");
+    }
+  });
+
+  g_hooks_installed = true;
+}
+
+static void UninstallHooks() {
+  if (!g_hooks_installed)
+    return;
+
+  ForEachProcessModule([](HMODULE m) {
+    if (g_original_show_window) {
+      RestoreIATInModule(m, reinterpret_cast<FARPROC>(g_original_show_window), "ShowWindow");
+    }
+    if (g_original_show_window_async) {
+      RestoreIATInModule(m, reinterpret_cast<FARPROC>(g_original_show_window_async),
+                         "ShowWindowAsync");
+    }
+  });
+  g_hooks_installed = false;
+}
+
+}  // namespace
+
+// Private implementation to hide Windows-specific details
+// Occlusion tracking for WindowOcclusionChangedEvent. Any window of any
+// process can cover ours, so these hooks are system-wide. The callback only
+// arms a short timer: the events come in bursts (a drag moves a window dozens
+// of times a second) and out-of-context WinEvents arrive whenever this thread
+// next reads a message, so the recomputation and the listeners run later from
+// the timer, never inside someone else's message handling.
+#ifndef EVENT_OBJECT_CLOAKED  // Windows 8 SDK constants, absent for older targets.
+#define EVENT_OBJECT_CLOAKED 0x8017
+#define EVENT_OBJECT_UNCLOAKED 0x8018
+#endif
+static HWINEVENTHOOK g_occlusion_hooks[5] = {};
+static UINT_PTR g_occlusion_timer = 0;
+constexpr UINT kOcclusionDelayMs = 100;
+
+static void CALLBACK OcclusionTimerProc(HWND, UINT, UINT_PTR timer, DWORD) {
+  WithObserver([&] {
+    KillTimer(nullptr, timer);
+    g_occlusion_timer = 0;
+    std::vector<HWND> windows;
+    windows.reserve(g_window_snapshots.size());
+    for (const auto& entry : g_window_snapshots)
+      windows.push_back(entry.first);
+    for (HWND hwnd : windows) {
+      if (!IsWindow(hwnd))
+        continue;
+      Window window(hwnd);
+      detail::WindowPropertyDispatch::RefreshOcclusion(window);
+    }
+  });
+}
+
+static void CALLBACK
+OcclusionEventProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG id_object, LONG id_child, DWORD, DWORD) {
+  if (id_object != OBJID_WINDOW || id_child != CHILDID_SELF || !hwnd ||
+      GetAncestor(hwnd, GA_ROOT) != hwnd)
+    return;
+  WithObserver([&] {
+    if (!g_occlusion_timer)
+      g_occlusion_timer = SetTimer(nullptr, 0, kOcclusionDelayMs, OcclusionTimerProc);
+  });
+}
+
+static void InstallOcclusionHooks() {
+  if (g_occlusion_hooks[0])
+    return;
+  const DWORD ranges[5][2] = {
+      {EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND},
+      {EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND},
+      {EVENT_OBJECT_SHOW, EVENT_OBJECT_REORDER},  // Show, hide, reorder.
+      {EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE},
+      {EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED},  // Virtual desktop switches.
+  };
+  for (int i = 0; i < 5; ++i)
+    g_occlusion_hooks[i] = SetWinEventHook(ranges[i][0], ranges[i][1], nullptr, OcclusionEventProc,
+                                           0, 0, WINEVENT_OUTOFCONTEXT);
+}
+
+static void RemoveOcclusionHooks() {
+  for (auto& hook : g_occlusion_hooks) {
+    if (hook)
+      UnhookWinEvent(hook);
+    hook = nullptr;
+  }
+  if (g_occlusion_timer)
+    KillTimer(nullptr, g_occlusion_timer);
+  g_occlusion_timer = 0;
+}
+
+class WindowManager::Impl {
+ public:
+  Impl(WindowManager* manager)
+      : manager_(manager), lifetime_(std::make_shared<std::atomic<bool>>(true)) {}
+  ~Impl() {
+    // The marshaled teardown may still be on its way, and must not reach us then.
+    lifetime_->store(false);
+    StopEventListening();
+  }
+
+  // Everything the WinEvent hooks and the geometry subclass do has to happen on
+  // the thread that owns this process's windows: out-of-context WinEvents are
+  // queued to the installing thread and only delivered while that thread reads
+  // messages, and Win32 refuses to subclass another thread's window. That thread
+  // is not necessarily the caller's — a Flutter app with the default thread
+  // policy first touches this from its UI isolate — so the work is marshaled
+  // instead of depending on which thread happened to call the API first.
+  void StartEventListening() {
+    std::function<void()> install_inline;
+    {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      if (started_) {
+        return;
+      }
+      started_ = true;
+      // Queued work runs later, possibly after a stop or another start. The
+      // generation tells it whether its own transition is still the current one.
+      const uint64_t generation = ++generation_;
+
+      auto lifetime = lifetime_;
+      auto install = [this, lifetime, generation] {
+        if (!lifetime->load()) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        if (generation != generation_ || !started_) {
+          return;
+        }
+        InstallObservation(lifetime);
+      };
+      const DWORD ui_thread = detail::FindUiThreadId();
+      observation_thread_ = ui_thread;
+      if (ui_thread && ui_thread != GetCurrentThreadId() &&
+          detail::PostToThread(ui_thread, install)) {
+        return;
+      }
+      // Already on the UI thread, or the process has no window of its own yet: do
+      // it here, which is what this did before the marshaling existed. It runs
+      // after the lock is released: it takes the lock itself.
+      observation_thread_ = GetCurrentThreadId();
+      install_inline = std::move(install);
+    }
+    install_inline();
+  }
+
+  void StopEventListening() {
+    std::function<void()> remove_inline;
+    {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      if (!started_) {
+        return;
+      }
+      started_ = false;
+      const uint64_t generation = ++generation_;
+      const DWORD thread = observation_thread_;
+      observation_thread_ = 0;
+
+      auto lifetime = lifetime_;
+      auto remove = [this, lifetime, generation] {
+        if (!lifetime->load()) {
+          // The manager is gone: only the hooks are left to unhook, and no start
+          // can follow, so this teardown is never stale.
+          RemoveObservation();
+          return;
+        }
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        if (generation != generation_ || started_) {
+          return;
+        }
+        RemoveObservation();
+      };
+      if (thread && thread != GetCurrentThreadId() && detail::PostToThread(thread, remove)) {
+        return;
+      }
+      remove_inline = std::move(remove);
+    }
+    remove_inline();
+  }
+
+ private:
+  // Runs on the UI thread.
+  void InstallObservation(const std::shared_ptr<std::atomic<bool>>& lifetime) {
+    // The callbacks are read under the observer lock, so claim the observation and
+    // install them there: NotifyWindowFullScreenChanged() may arrive from any thread.
+    {
+      std::lock_guard<std::recursive_mutex> lock(g_observer_mutex);
+      if (g_observer_lifetime && g_observer_lifetime->load()) {
+        return;  // Already installed (a start queued twice, or after a failed stop).
+      }
+      g_observer_lifetime = lifetime;
+      g_foreground_changed_context = this;
+      g_foreground_changed_fn = [](void* impl, HWND hwnd) {
+        static_cast<Impl*>(impl)->OnForegroundChanged(hwnd);
+      };
+      g_window_changed_context = this;
+      g_window_changed_fn = [](void* impl, DWORD event, HWND hwnd) {
+        static_cast<Impl*>(impl)->OnWindowChanged(event, hwnd);
+      };
+      g_full_screen_changed_context = this;
+      g_full_screen_changed_fn = [](void* impl, HWND hwnd, bool is_full_screen) {
+        static_cast<Impl*>(impl)->OnWindowEvent(
+            hwnd, is_full_screen ? "entered_full_screen" : "exited_full_screen");
+      };
+    }
+
+    if (!g_foreground_hook) {
+      g_foreground_hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                          ForegroundEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    }
+
+    // Seed the tracked window so the first blur names the right window.
+    HWND foreground = GetForegroundWindow();
+    g_focused_hwnd = IsOwnProcessWindow(foreground) ? foreground : nullptr;
+
+    // Unlike the foreground hook this only concerns our own windows, so it is
+    // scoped to this process and costs nothing while other applications work.
+    // Showing and destroying are rare, unlike location changes (see above).
+    if (!g_lifetime_hook) {
+      // EVENT_OBJECT_DESTROY and EVENT_OBJECT_SHOW are adjacent
+      g_lifetime_hook =
+          SetWinEventHook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_SHOW, nullptr, WindowChangedEventProc,
+                          GetCurrentProcessId(), 0, WINEVENT_OUTOFCONTEXT);
+    }
+
+    InstallOcclusionHooks();
+
+    // Windows that exist already have a state to compare the first change with.
+    // Only this thread can subclass them, which is why this runs here.
+    EnumWindows(
+        [](HWND hwnd, LPARAM) -> BOOL {
+          if (IsOwnProcessWindow(hwnd) && IsReportableWindow(hwnd)) {
+            g_window_snapshots[hwnd] = TakeSnapshot(hwnd);
+            WatchWindowGeometry(hwnd);
+            Window window(hwnd);
+            detail::WindowPropertyDispatch::RefreshOcclusion(window);
+            // Already on screen, so not created under our eyes: no
+            // WindowCreatedEvent for it, only the WindowClosedEvent.
+            if (IsWindowVisible(hwnd)) {
+              WindowId window_id = GetWindowIdFromHwnd(hwnd);
+              if (window_id != IdAllocator::kInvalidId) {
+                g_shown_windows[hwnd] = window_id;
+              }
+            }
+          }
+          return TRUE;
+        },
+        0);
+  }
+
+  // Runs on the thread that installed the hooks; only touches this file's state,
+  // so a teardown queued before the destructor can still finish the job.
+  static void RemoveObservation() {
+    {
+      // Detach the callbacks first: nothing may reach the Impl from here on, and a
+      // callback already inside finishes before this returns.
+      std::lock_guard<std::recursive_mutex> lock(g_observer_mutex);
+      g_observer_lifetime.reset();
+      g_foreground_changed_fn = nullptr;
+      g_foreground_changed_context = nullptr;
+      g_window_changed_fn = nullptr;
+      g_window_changed_context = nullptr;
+      g_full_screen_changed_fn = nullptr;
+      g_full_screen_changed_context = nullptr;
+      g_focused_hwnd = nullptr;
+    }
+    RemoveOcclusionHooks();
+    if (g_foreground_hook) {
+      UnhookWinEvent(g_foreground_hook);
+      g_foreground_hook = nullptr;
+    }
+    if (g_lifetime_hook) {
+      UnhookWinEvent(g_lifetime_hook);
+      g_lifetime_hook = nullptr;
+    }
+    for (const auto& [hwnd, snapshot] : g_window_snapshots) {
+      UnwatchWindowGeometry(hwnd);
+    }
+    g_window_snapshots.clear();
+    g_shown_windows.clear();
+  }
+
+ public:
+  static WindowSnapshot TakeSnapshot(HWND hwnd) {
+    WindowSnapshot snapshot = {};
+    snapshot.minimized = IsIconic(hwnd) != FALSE;
+    snapshot.maximized = IsZoomed(hwnd) != FALSE;
+    GetWindowRect(hwnd, &snapshot.rect);
+    return snapshot;
+  }
+
+  // Compare a window with its last snapshot and emit what changed.
+  void OnWindowChanged(DWORD event, HWND hwnd) {
+    if (event == EVENT_OBJECT_DESTROY) {
+      g_window_snapshots.erase(hwnd);
+      auto shown = g_shown_windows.find(hwnd);
+      if (shown != g_shown_windows.end()) {
+        const WindowId window_id = shown->second;
+        g_shown_windows.erase(shown);
+        WindowClosedEvent closed_event(window_id);
+        manager_->DispatchWindowEvent(closed_event);
+      }
+      return;
+    }
+    if (!IsReportableWindow(hwnd)) {
+      return;
+    }
+
+    if (IsWindowVisible(hwnd) && g_shown_windows.find(hwnd) == g_shown_windows.end()) {
+      WindowId window_id = GetWindowIdFromHwnd(hwnd);
+      if (window_id != IdAllocator::kInvalidId) {
+        g_shown_windows[hwnd] = window_id;
+        WindowCreatedEvent created_event(window_id);
+        manager_->DispatchWindowEvent(created_event);
+      }
+    }
+
+    const WindowSnapshot current = TakeSnapshot(hwnd);
+    auto it = g_window_snapshots.find(hwnd);
+    if (it == g_window_snapshots.end()) {
+      // First sight (a window being shown): nothing to compare with yet
+      g_window_snapshots[hwnd] = current;
+      WatchWindowGeometry(hwnd);
+      return;
+    }
+    if (event != EVENT_OBJECT_LOCATIONCHANGE) {
+      return;
+    }
+
+    const WindowSnapshot previous = it->second;
+    if (current.minimized) {
+      // A minimized window is parked off screen (-32000) and no longer reports
+      // as maximized. Keep the rest of the snapshot, so that restoring it to
+      // where it was is neither a move, a resize nor a second "maximized".
+      it->second.minimized = true;
+      if (!previous.minimized) {
+        OnWindowEvent(hwnd, "minimized");
+      }
+      return;
+    }
+    it->second = current;
+
+    if (previous.minimized) {
+      OnWindowEvent(hwnd, "restored");
+    }
+    if (current.maximized != previous.maximized) {
+      OnWindowEvent(hwnd, current.maximized ? "maximized" : "restored");
+    }
+    if (current.rect.left != previous.rect.left || current.rect.top != previous.rect.top) {
+      OnWindowEvent(hwnd, "moved");
+    }
+    if (current.rect.right - current.rect.left != previous.rect.right - previous.rect.left ||
+        current.rect.bottom - current.rect.top != previous.rect.bottom - previous.rect.top) {
+      OnWindowEvent(hwnd, "resized");
+    }
+  }
+
+  // Translate a foreground change into blurred/focused events. Only windows of
+  // this process are reported: focus moving to another application blurs the
+  // window we were tracking and focuses nothing.
+  void OnForegroundChanged(HWND hwnd) {
+    if (hwnd == g_focused_hwnd) {
+      return;
+    }
+
+    HWND previous = g_focused_hwnd;
+    g_focused_hwnd = IsOwnProcessWindow(hwnd) ? hwnd : nullptr;
+
+    if (previous && IsWindow(previous)) {
+      OnWindowEvent(previous, "blurred");
+    }
+    if (g_focused_hwnd) {
+      OnWindowEvent(g_focused_hwnd, "focused");
+    }
+  }
+
+  void OnWindowEvent(HWND hwnd, const std::string& event_type) {
+    // Get window ID, first trying custom property, then creating Window if needed
+    WindowId window_id = GetWindowIdFromHwnd(hwnd);
+    if (window_id == IdAllocator::kInvalidId) {
+      return;
+    }
+
+    if (event_type == "focused") {
+      WindowFocusedEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "blurred") {
+      WindowBlurredEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "minimized") {
+      WindowMinimizedEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "restored") {
+      WindowRestoredEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "maximized") {
+      WindowMaximizedEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "entered_full_screen") {
+      WindowEnteredFullScreenEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "exited_full_screen") {
+      WindowExitedFullScreenEvent event(window_id);
+      manager_->DispatchWindowEvent(event);
+    } else if (event_type == "resized" || event_type == "moved") {
+      // Report what the getters return (logical pixels), not the raw rectangle
+      auto window = WindowRegistry::GetInstance().Get(window_id);
+      if (!window) {
+        return;
+      }
+      if (event_type == "resized") {
+        WindowResizedEvent event(window_id, window->GetSize());
+        manager_->DispatchWindowEvent(event);
+      } else {
+        WindowMovedEvent event(window_id, window->GetPosition());
+        manager_->DispatchWindowEvent(event);
+      }
+    } else if (event_type == "closing") {
+      // Window closing event - no longer emitted
+    }
+  }
+
+ private:
+  WindowManager* manager_;
+  // Shared with the marshaled install, so a start that arrives after the manager
+  // is gone does nothing instead of reaching freed memory.
+  std::shared_ptr<std::atomic<bool>> lifetime_;
+  std::mutex lifecycle_mutex_;
+  bool started_ = false;
+  // Bumped by every start and stop, so a queued transition can tell that its own
+  // is no longer the current one.
+  uint64_t generation_ = 0;
+  // The thread the hooks were installed on; 0 while stopped.
+  DWORD observation_thread_ = 0;
+  // Optional pre-show/hide hooks
+  // Held by shared_ptr so HandleWillShow/Hide can keep a hook alive while it
+  // replaces or clears itself, without copying it.
+  std::shared_ptr<WindowManager::WindowWillShowHook> will_show_hook_;
+  std::shared_ptr<WindowManager::WindowWillHideHook> will_hide_hook_;
+
+  friend class WindowManager;
+};
+
+WindowManager::WindowManager() : pimpl_(std::make_unique<Impl>(this)) {
+  StartEventListening();
+}
+
+WindowManager::~WindowManager() {
+  ShutdownEmitter();
+  StopEventListening();
+}
+
+namespace {
+
+struct WindowIdSearch {
+  WindowId id;
+  HWND found;
+};
+
+// Finds this process's top-level window carrying an ID, visible or not.
+BOOL CALLBACK FindWindowWithId(HWND hwnd, LPARAM data) {
+  auto* search = reinterpret_cast<WindowIdSearch*>(data);
+  if (!IsOwnProcessWindow(hwnd)) {
+    return TRUE;
+  }
+  HANDLE prop_handle = GetPropW(hwnd, kWindowIdProperty);
+  if (prop_handle && static_cast<WindowId>(reinterpret_cast<uintptr_t>(prop_handle)) == search->id) {
+    search->found = hwnd;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+}  // namespace
+
+std::shared_ptr<Window> WindowManager::Get(WindowId id) {
+  // First try to get from registry
+  auto window = WindowRegistry::GetInstance().Get(id);
+  if (window) {
+    return window;
+  }
+
+  // Not registered yet: the window may still exist, hidden or untitled (which
+  // GetAll() skips), so look for the ID on this process's windows directly.
+  WindowIdSearch search = {id, nullptr};
+  EnumWindows(FindWindowWithId, reinterpret_cast<LPARAM>(&search));
+  if (search.found) {
+    GetWindowIdFromHwnd(search.found);
+  }
+  return WindowRegistry::GetInstance().Get(id);
+}
+
+// Callback for EnumWindows to collect all top-level windows
+static BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM lParam) {
+  auto* windows = reinterpret_cast<std::vector<HWND>*>(lParam);
+
+  // Only include visible windows that are not minimized to taskbar
+  // and have a title (filters out many background windows)
+  if (IsWindowVisible(hwnd)) {
+    int length = GetWindowTextLengthW(hwnd);
+    if (length > 0) {
+      // Check if it's a normal window (not tool window, etc.)
+      LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+      if (!(exStyle & WS_EX_TOOLWINDOW)) {
+        windows->push_back(hwnd);
+      }
+    }
+  }
+
+  return TRUE;  // Continue enumeration
+}
+
+std::vector<std::shared_ptr<Window>> WindowManager::GetAll() {
+  std::vector<HWND> hwnds;
+
+  // Enumerate all top-level windows
+  EnumWindows(EnumWindowsCallback, reinterpret_cast<LPARAM>(&hwnds));
+
+  std::vector<std::shared_ptr<Window>> windows;
+  windows.reserve(hwnds.size());
+
+  for (HWND hwnd : hwnds) {
+    // Get window ID from HWND, creating Window object if needed
+    WindowId window_id = GetWindowIdFromHwnd(hwnd);
+
+    if (window_id != IdAllocator::kInvalidId) {
+      // Try to get existing window from registry
+      auto window = WindowRegistry::GetInstance().Get(window_id);
+      if (window) {
+        windows.push_back(window);
+      }
+    }
+  }
+
+  return windows;
+}
+
+std::shared_ptr<Window> WindowManager::GetCurrent() {
+  HWND hwnd = GetActiveWindow();
+  if (hwnd) {
+    WindowId window_id = GetWindowIdFromHwnd(hwnd);
+    if (window_id != IdAllocator::kInvalidId) {
+      return Get(window_id);
+    }
+  }
+  return nullptr;
+}
+
+namespace {
+
+// Library positions are logical pixels in the screen space that
+// screen_layout_windows.h lays out.
+POINT LogicalToPhysicalScreenPoint(Point point) {
+  return LogicalToPhysicalPoint(point);
+}
+
+// Whether `hwnd`, a top-level window, visibly covers `point`. Used below the
+// window excluded from a hit test, where the system's own hit test cannot look.
+bool CoversPoint(HWND hwnd, POINT point) {
+  if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
+    return false;
+  }
+  LONG ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+  if (ex_style & WS_EX_LAYERED) {
+    if (ex_style & WS_EX_TRANSPARENT) {
+      return false;  // Click-through overlay.
+    }
+    BYTE alpha = 255;
+    DWORD flags = 0;
+    if (GetLayeredWindowAttributes(hwnd, nullptr, &alpha, &flags) && (flags & LWA_ALPHA) &&
+        alpha == 0) {
+      return false;  // Fully transparent.
+    }
+  }
+  BOOL cloaked = FALSE;
+  if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+      cloaked) {
+    return false;  // On another virtual desktop, or a suspended UWP frame.
+  }
+  // The extended frame excludes the invisible resize borders that
+  // GetWindowRect() includes on Windows 10 and later.
+  RECT rect;
+  if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))) {
+    if (!GetWindowRect(hwnd, &rect)) {
+      return false;
+    }
+  }
+  return PtInRect(&rect, point) != FALSE;
+}
+
+}  // namespace
+
+std::shared_ptr<Window> WindowManager::GetWindowAtPoint(Point point, WindowId excluded_window_id) {
+  HWND excluded = nullptr;
+  if (excluded_window_id != 0) {
+    if (auto window = Get(excluded_window_id)) {
+      excluded = static_cast<HWND>(window->GetNativeObject());
+    }
+  }
+  const POINT physical = LogicalToPhysicalScreenPoint(point);
+
+  // Ask the system first: WindowFromPoint() is the window a click would reach,
+  // so it looks through click-through overlays (layered windows with
+  // transparent pixels, like game or capture overlays) that cover the screen.
+  HWND found = WindowFromPoint(physical);
+  if (found) {
+    found = GetAncestor(found, GA_ROOT);
+  }
+  if (found && found == excluded) {
+    // The excluded window, typically the one being dragged, is right under the
+    // point. Walk down the stack beneath it instead.
+    found = nullptr;
+    for (HWND below = GetWindow(excluded, GW_HWNDNEXT); below;
+         below = GetWindow(below, GW_HWNDNEXT)) {
+      if (CoversPoint(below, physical)) {
+        found = below;
+        break;
+      }
+    }
+  }
+  // Another application's window on top means the point is covered.
+  if (!found || !IsOwnProcessWindow(found)) {
+    return nullptr;
+  }
+  WindowId window_id = GetWindowIdFromHwnd(found);
+  if (window_id == IdAllocator::kInvalidId) {
+    return nullptr;
+  }
+  return Get(window_id);
+}
+
+void WindowManager::SetWillShowHook(std::optional<WindowWillShowHook> hook) {
+  pimpl_->will_show_hook_ =
+      hook && *hook ? std::make_shared<WindowWillShowHook>(std::move(*hook)) : nullptr;
+
+  bool has_any_hook = pimpl_->will_show_hook_ || pimpl_->will_hide_hook_;
+  has_any_hook ? InstallHooks() : UninstallHooks();
+}
+
+void WindowManager::SetWillHideHook(std::optional<WindowWillHideHook> hook) {
+  pimpl_->will_hide_hook_ =
+      hook && *hook ? std::make_shared<WindowWillHideHook>(std::move(*hook)) : nullptr;
+
+  bool has_any_hook = pimpl_->will_show_hook_ || pimpl_->will_hide_hook_;
+  has_any_hook ? InstallHooks() : UninstallHooks();
+}
+
+bool WindowManager::HasWillShowHook() const {
+  return pimpl_->will_show_hook_ != nullptr;
+}
+
+bool WindowManager::HasWillHideHook() const {
+  return pimpl_->will_hide_hook_ != nullptr;
+}
+
+void WindowManager::HandleWillShow(WindowId id) {
+  // The hook may replace or clear itself. Keep this invocation alive.
+  auto hook = pimpl_->will_show_hook_;
+  if (hook) {
+    (*hook)(id);
+  }
+}
+
+void WindowManager::HandleWillHide(WindowId id) {
+  // The hook may replace or clear itself. Keep this invocation alive.
+  auto hook = pimpl_->will_hide_hook_;
+  if (hook) {
+    (*hook)(id);
+  }
+}
+
+bool WindowManager::CallOriginalShow(WindowId id) {
+  auto window = Get(id);
+  if (!window) {
+    return false;
+  }
+  void* native = window->GetNativeObject();
+  if (!native) {
+    return false;
+  }
+  HWND hwnd = static_cast<HWND>(native);
+  // On Windows, call the original ShowWindow through the function pointer
+  if (g_original_show_window) {
+    return g_original_show_window(hwnd, SW_SHOW) != FALSE;
+  }
+  return false;
+}
+
+bool WindowManager::CallOriginalHide(WindowId id) {
+  auto window = Get(id);
+  if (!window) {
+    return false;
+  }
+  void* native = window->GetNativeObject();
+  if (!native) {
+    return false;
+  }
+  HWND hwnd = static_cast<HWND>(native);
+  // On Windows, call the original ShowWindow through the function pointer
+  if (g_original_show_window) {
+    return g_original_show_window(hwnd, SW_HIDE) != FALSE;
+  }
+  return false;
+}
+
+void WindowManager::StartEventListening() {
+  pimpl_->StartEventListening();
+}
+
+void WindowManager::StopEventListening() {
+  pimpl_->StopEventListening();
+}
+
+void WindowManager::DispatchWindowEvent(const WindowEvent& event) {
+  detail::EmitObservedWindowEvent(event);
+  Emit(event);
+}
+
+}  // namespace nativeapi

@@ -151,6 +151,7 @@ class _MemberPageState extends State<MemberPage> with WidgetsBindingObserver {
                         chargeCount: _userController.chargeCount,
                         guards: _userController.guards,
                         guardCount: _userController.guardCount,
+                        hasMedal: _userController.medal == 1,
                       ),
                     ),
                   ),

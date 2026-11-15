@@ -169,7 +169,7 @@ class VideoCardHLater extends StatelessWidget {
             bottom: -8,
             child: iconButton(
               tooltip: '移除',
-              onPressed: () => ctr.toViewDel(context, index, videoItem.aid),
+              onPressed: () => ctr.toViewDel(context, index, videoItem.aid!),
               icon: const Icon(Icons.clear),
               iconColor: theme.colorScheme.outline,
             ),
@@ -190,9 +190,9 @@ Future<void> onPushLater(
   }
   if (item.isPgc ?? false) {
     if (item.bangumi?.epId != null) {
-      PageUtils.viewPgc(epId: item.bangumi!.epId);
+      PageUtils.viewPgc(epId: item.bangumi!.epId, viewLater: true);
     } else if (item.redirectUrl?.isNotEmpty == true) {
-      PageUtils.viewPgcFromUri(item.redirectUrl!);
+      PageUtils.viewPgcFromUri(item.redirectUrl!, viewLater: true);
     }
     return;
   }

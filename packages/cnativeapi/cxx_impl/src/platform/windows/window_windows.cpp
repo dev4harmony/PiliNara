@@ -1,0 +1,3091 @@
+#ifdef NATIVEAPI_ENABLE_WINUI3
+#include "window_winui3_windows.h"
+#endif
+#include <dwmapi.h>
+#include <windows.h>
+#include <commctrl.h>
+#include <shobjidl.h>
+#include <algorithm>
+#include <climits>
+#include <cmath>
+#include <iostream>
+#include <optional>
+#include <unordered_map>
+#include "../../foundation/id_allocator.h"
+#include "../../window.h"
+#include "../../window_shape.h"
+#include "../../window_manager.h"
+#include "../../window_registry.h"
+#include "dpi_utils_windows.h"
+#include "string_utils_windows.h"
+#include "window_message_dispatcher.h"
+#include "../../window_property_dispatch.h"
+#include "window_shape_shadow_windows.h"
+
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "ole32.lib")
+
+#include "window_docking_windows.h"
+
+namespace nativeapi {
+
+static const wchar_t* kControlPolicyProperty = L"NativeAPIControlButtonPolicy";
+struct ControlButtonPolicy {
+  bool visible = true;
+  bool closable = true;
+};
+
+// Property name for storing window ID in HWND
+static const wchar_t* kWindowIdProperty = L"NativeAPIWindowId";
+// Set while the title bar is hidden. Kept on the HWND, like the style itself, so every
+// wrapper of the window agrees and the frame handling below outlives any one wrapper.
+static const wchar_t* kTitleBarHiddenProperty = L"NativeAPITitleBarHidden";
+// The other two window flags the system cannot be asked about afterwards, kept on the
+// HWND for the same reason.
+static const wchar_t* kNoShadowProperty = L"NativeAPINoShadow";
+// Set while a window with a hidden title bar has no compositor-drawn frame: its client
+// area then covers the whole window (WM_NCCALCSIZE), because the sizing frame left
+// without the compositor is painted in the classic theme.
+static const wchar_t* kExplicitFramelessProperty = L"NativeAPIExplicitFrameless";
+static const wchar_t* kFramelessClientProperty = L"NativeAPIFramelessClient";
+// Set while a shape applied with SetShape is in force. The window region alone does not
+// tell: without the compositor's frame the visual style puts a region of its own on a
+// window (the rounded corners of the classic frame).
+static const wchar_t* kShapedProperty = L"NativeAPIShaped";
+static const wchar_t* kHiddenFromTaskbarProperty = L"NativeAPIHiddenFromTaskbar";
+// Policies belong to the HWND so wrapped host windows and later wrappers agree.
+static const wchar_t* kNonFocusableProperty = L"NativeAPINonFocusable";
+static const wchar_t* kNonActivatingProperty = L"NativeAPINonActivating";
+static const wchar_t* kMouseInputPolicyProperty = L"NativeAPIMouseInputPolicy";
+
+struct MouseInputPolicy {
+  bool forward = false;
+  bool added_layered = false;
+  UINT_PTR timer = 0;
+  HWND target = nullptr;
+  POINT last = {};
+};
+
+static HWND MouseContentAt(HWND window, POINT screen) {
+  HWND result = window;
+  for (int depth = 0; depth < 64; ++depth) {
+    // Native hit testing deliberately ignores this layered transparent window.
+    // Walk the content's geometry in Z order instead of asking the OS for its
+    // actual input target (which belongs to the application underneath).
+    HWND target = nullptr;
+    for (HWND child = GetWindow(result, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+      RECT bounds = {};
+      if (IsWindowVisible(child) && IsWindowEnabled(child) &&
+          !(GetWindowLongPtrW(child, GWL_EXSTYLE) & WS_EX_TRANSPARENT) &&
+          GetWindowRect(child, &bounds) && PtInRect(&bounds, screen)) {
+        target = child;
+        break;
+      }
+    }
+    if (!target) break;
+    result = target;
+  }
+  return result;
+}
+
+static void CALLBACK ForwardMouseMovement(HWND window, UINT, UINT_PTR timer, DWORD) {
+  auto* policy = static_cast<MouseInputPolicy*>(GetPropW(window, kMouseInputPolicyProperty));
+  if (!policy || !policy->forward || policy->timer != timer) return;
+  POINT screen = {};
+  if (!GetCursorPos(&screen)) return;
+  POINT local = screen;
+  ScreenToClient(window, &local);
+  RECT client = {};
+  GetClientRect(window, &client);
+  HWND target = IsWindowVisible(window) && !IsIconic(window) && PtInRect(&client, local)
+                    ? MouseContentAt(window, screen) : nullptr;
+  if (target != policy->target && IsWindow(policy->target))
+    PostMessageW(policy->target, WM_MOUSELEAVE, 0, 0);
+  if (target) {
+    local = screen;
+    ScreenToClient(target, &local);
+    if (target != policy->target || local.x != policy->last.x || local.y != policy->last.y) {
+      const WPARAM keys = ((GetKeyState(VK_SHIFT) & 0x8000) ? MK_SHIFT : 0) |
+                          ((GetKeyState(VK_CONTROL) & 0x8000) ? MK_CONTROL : 0);
+      PostMessageW(target, WM_MOUSEMOVE, keys, MAKELPARAM(local.x, local.y));
+    }
+  }
+  policy->target = target;
+  policy->last = local;
+}
+
+static LRESULT CALLBACK MouseInputPolicySubclass(HWND window, UINT message, WPARAM wparam,
+                                                 LPARAM lparam, UINT_PTR id, DWORD_PTR data) {
+  if (message == WM_NCDESTROY) {
+    auto* policy = reinterpret_cast<MouseInputPolicy*>(data);
+    if (policy->timer) KillTimer(window, policy->timer);
+    RemovePropW(window, kMouseInputPolicyProperty);
+    RemoveWindowSubclass(window, MouseInputPolicySubclass, id);
+    delete policy;
+  }
+  return DefSubclassProc(window, message, wparam, lparam);
+}
+static const wchar_t* kFocusReturnWindowProperty = L"NativeAPIFocusReturnWindow";
+// The window that was in the foreground before Focus() or Show() took it; Blur()
+// hands the foreground back to it. Distinct from the focus-policy property above,
+// which only a no-activate window uses and its policy change clears.
+static const wchar_t* kBlurReturnWindowProperty = L"NativeAPIBlurReturnWindow";
+// Maximize() on a window that is not shown yet: shown later by anyone - a
+// Flutter runner's first-frame ShowWindow(SW_SHOWNORMAL) - it appears maximized.
+static const wchar_t* kShowMaximizedProperty = L"NativeAPIShowMaximized";
+static UINT ShowMaximizedMessage() {
+  static const UINT message = RegisterWindowMessageW(L"NativeAPIShowMaximized");
+  return message;
+}
+// The app-drawn maximize button (MaximizeButtonArea), owned by the HWND.
+static const wchar_t* kMaximizeButtonProperty = L"NativeAPIMaximizeButton";
+struct MaximizeButtonArea {
+  Rectangle bounds;            // Content-area logical coordinates.
+  bool tracking_leave = false;  // TME_NONCLIENT | TME_LEAVE is armed.
+  HWND hovered = nullptr;       // Content window that was sent the last move.
+};
+// The translucent background color of the window, as 0x1AARRGGBB (the leading 1 tells
+// a transparent black from "no property"). Set while the window is see-through.
+static const wchar_t* kTranslucentBackgroundProperty = L"NativeAPITranslucentBackground";
+// The visual effect in force, as the VisualEffect value (None is "no property"). On the
+// HWND like the flags above, and because WindowProc has to see it.
+static const wchar_t* kVisualEffectProperty = L"NativeAPIVisualEffect";
+// DWM's corner preference is a set-only attribute. Remember the accepted
+// policy on the native window so wrappers share it, independently of rendering.
+static const wchar_t* kCornerPreferenceProperty = L"NativeAPICornerPreference";
+// The opaque background color of a window of the library's own class, as 0x1RRGGBB.
+// WindowProc paints it: the class brush would be every such window's background at once.
+static const wchar_t* kBackgroundColorProperty = L"NativeAPIBackgroundColor";
+
+// SetWindowCompositionAttribute is how the shell itself makes windows see-through. It is
+// exported by user32 but not declared in the SDK.
+namespace {
+
+enum AccentState {
+  kAccentDisabled = 0,
+  kAccentEnableGradient = 1,
+  kAccentEnableTransparentGradient = 2,
+  kAccentEnableBlurBehind = 3,
+  kAccentEnableAcrylicBlurBehind = 4,
+};
+
+struct AccentPolicy {
+  int accent_state;
+  int accent_flags;
+  DWORD gradient_color;  // 0xAABBGGRR
+  int animation_id;
+};
+
+struct WindowCompositionAttributeData {
+  int attribute;
+  PVOID data;
+  SIZE_T size;
+};
+
+constexpr int kWcaAccentPolicy = 19;
+
+// accent_flags 2 has the gradient color drawn, which is all a see-through background is.
+// The blur-behind accents come out nearly black with it and want 0.
+bool SetAccentPolicy(HWND hwnd, AccentState state, DWORD gradient_color, int accent_flags = 2) {
+  using SetWindowCompositionAttributeFn = BOOL(WINAPI*)(HWND, WindowCompositionAttributeData*);
+  static const auto set_attribute = reinterpret_cast<SetWindowCompositionAttributeFn>(
+      GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowCompositionAttribute"));
+  if (!set_attribute) {
+    return false;
+  }
+  AccentPolicy policy = {state, accent_flags, gradient_color, 0};
+  WindowCompositionAttributeData data = {kWcaAccentPolicy, &policy, sizeof(policy)};
+  return set_attribute(hwnd, &data) != FALSE;
+}
+
+// The accent a see-through background color asks for. A visual effect takes the accent
+// over while it is active, and hands it back through here.
+void ApplyBackgroundAccent(HWND hwnd) {
+  const auto stored = reinterpret_cast<uintptr_t>(GetPropW(hwnd, kTranslucentBackgroundProperty));
+  if (!stored) {
+    SetAccentPolicy(hwnd, kAccentDisabled, 0);
+    return;
+  }
+  // 0x1AARRGGBB to 0xAABBGGRR
+  const DWORD gradient = static_cast<DWORD>((stored & 0xFF000000) | ((stored & 0xFF) << 16) |
+                                            (stored & 0xFF00) | ((stored >> 16) & 0xFF));
+  SetAccentPolicy(hwnd, kAccentEnableTransparentGradient, gradient);
+}
+
+// DWMWA_SYSTEMBACKDROP_TYPE and DWM_SYSTEMBACKDROP_TYPE, which SDKs before 10.0.22621
+// do not declare.
+constexpr DWORD kDwmwaSystemBackdropType = 38;
+enum SystemBackdrop : int {
+  kBackdropNone = 1,
+  kBackdropMica = 2,
+  kBackdropAcrylic = 3,
+  kBackdropMicaAlt = 4,
+};
+
+constexpr DWORD kBuildAcrylicAccent = 17134;   // Windows 10 1803
+constexpr DWORD kBuildSystemBackdrop = 22621;  // Windows 11 22H2
+constexpr DWORD kBuildCornerPreference = 22000;  // Windows 11
+// Older SDKs do not declare DWMWA_WINDOW_CORNER_PREFERENCE or its enum.
+constexpr DWORD kDwmwaWindowCornerPreference = 33;
+
+// GetVersionExW lies to manifest-less processes; RtlGetVersion reports the real build.
+DWORD WindowsBuildNumber() {
+  static const DWORD build = [] {
+    using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    auto rtl_get_version =
+        ntdll ? reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion")) : nullptr;
+    RTL_OSVERSIONINFOW info = {};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (!rtl_get_version || rtl_get_version(&info) != 0) {
+      return DWORD{0};
+    }
+    return info.dwBuildNumber;
+  }();
+  return build;
+}
+
+// How an effect is drawn on the version that is running: as one of the compositor's
+// system backdrops, as an accent, or not at all (both zero).
+struct VisualEffectRecipe {
+  SystemBackdrop backdrop = kBackdropNone;
+  AccentState accent = kAccentDisabled;
+  bool IsAvailable() const { return backdrop != kBackdropNone || accent != kAccentDisabled; }
+};
+
+VisualEffectRecipe RecipeFor(VisualEffect effect) {
+  const DWORD build = WindowsBuildNumber();
+  VisualEffectRecipe recipe;
+  switch (effect) {
+    case VisualEffect::None:
+      break;
+    case VisualEffect::Blur:
+      // The accent blur is drawn behind the client area only, and the caption DWM
+      // draws over it stays opaque - a transparent caption color does not help, it
+      // shows white. A system backdrop covers the whole window, caption included, so
+      // it is the better match wherever there is one, even though the nearest kind is
+      // the acrylic one.
+      if (build >= kBuildSystemBackdrop) {
+        recipe.backdrop = kBackdropAcrylic;
+      } else {
+        recipe.accent = kAccentEnableBlurBehind;
+      }
+      break;
+    case VisualEffect::Acrylic:
+    case VisualEffect::Hud:
+    case VisualEffect::Popover:
+    case VisualEffect::Menu:
+      if (build >= kBuildSystemBackdrop) {
+        recipe.backdrop = kBackdropAcrylic;
+      } else if (build >= kBuildAcrylicAccent) {
+        recipe.accent = kAccentEnableAcrylicBlurBehind;
+      }
+      break;
+    case VisualEffect::Mica:
+      if (build >= kBuildSystemBackdrop) recipe.backdrop = kBackdropMica;
+      break;
+    case VisualEffect::MicaAlt:
+      if (build >= kBuildSystemBackdrop) recipe.backdrop = kBackdropMicaAlt;
+      break;
+  }
+  return recipe;
+}
+
+// -1 on every side turns the whole client area into the compositor's frame. A system
+// backdrop is drawn on that frame and nowhere else. A blur-behind accent is the other way
+// round: it is drawn behind the client area, and the frame, where there is any, covers it.
+// A see-through background color is an accent too, but only ever shown through a child
+// that covers the client area (a Flutter view), and that has been found to need the frame.
+void UpdateFrameExtent(HWND hwnd) {
+  const auto effect = static_cast<VisualEffect>(
+      reinterpret_cast<uintptr_t>(GetPropW(hwnd, kVisualEffectProperty)));
+  const bool whole = effect != VisualEffect::None
+                         ? RecipeFor(effect).backdrop != kBackdropNone
+                         : GetPropW(hwnd, kTranslucentBackgroundProperty) != nullptr;
+  const int extent = whole ? -1 : 0;
+  MARGINS margins = {extent, extent, extent, extent};
+  DwmExtendFrameIntoClientArea(hwnd, &margins);
+}
+
+}  // namespace
+
+// What a window looked like before it was made full screen, so that leaving full screen
+// restores exactly that. Windows has no full-screen window state of its own — a full
+// screen window is an ordinary window without a frame, sized to the monitor — so the
+// library has to remember which of its windows are in that state. Reading it back from
+// the geometry instead would make anything that moves or resizes the window look like
+// leaving full screen, and the frame would then never be restored.
+struct FullScreenState {
+  WINDOWPLACEMENT placement;
+  LONG_PTR style;
+  LONG_PTR ex_style;
+};
+static std::unordered_map<HWND, FullScreenState> g_full_screen_windows;
+
+// Caption policies refer to the frame restored after fullscreen, not its
+// temporary WS_POPUP style. MIN/MAX bits stay intact while the group is hidden.
+static LONG_PTR CaptionStyle(HWND hwnd) {
+  const auto full = g_full_screen_windows.find(hwnd);
+  return full == g_full_screen_windows.end() ? GetWindowLongPtrW(hwnd, GWL_STYLE)
+                                             : full->second.style;
+}
+static void SetCaptionStyle(HWND hwnd, LONG_PTR style) {
+  constexpr LONG_PTR buttons = WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+  auto full = g_full_screen_windows.find(hwnd);
+  if (full != g_full_screen_windows.end())
+    full->second.style = (full->second.style & ~buttons) | (style & buttons);
+  const auto actual = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  SetWindowLongPtrW(hwnd, GWL_STYLE, (actual & ~buttons) | (style & buttons));
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+static bool NativeClosable(HWND hwnd) {
+  if (g_full_screen_windows.count(hwnd)) {
+    if (auto* policy = static_cast<ControlButtonPolicy*>(GetPropW(hwnd, kControlPolicyProperty)))
+      return policy->closable;
+  }
+  if (!(CaptionStyle(hwnd) & WS_SYSMENU)) return false;
+  HMENU menu = GetSystemMenu(hwnd, FALSE);
+  if (!menu) return g_full_screen_windows.count(hwnd) != 0;
+  const UINT state = GetMenuState(menu, SC_CLOSE, MF_BYCOMMAND);
+  return state != static_cast<UINT>(-1) && !(state & (MF_DISABLED | MF_GRAYED));
+}
+static ControlButtonPolicy* ControlPolicy(HWND hwnd, bool create) {
+  if (!hwnd || !::IsWindow(hwnd)) return nullptr;
+  auto* policy = static_cast<ControlButtonPolicy*>(GetPropW(hwnd, kControlPolicyProperty));
+  if (!policy && create) {
+    policy = new ControlButtonPolicy;
+    policy->closable = NativeClosable(hwnd);
+    policy->visible = (CaptionStyle(hwnd) & WS_SYSMENU) != 0;
+    if (!SetPropW(hwnd, kControlPolicyProperty, policy)) {
+      delete policy;
+      return nullptr;
+    }
+  }
+  return policy;
+}
+static void ApplyControlPolicy(HWND hwnd, const ControlButtonPolicy& policy) {
+  auto style = CaptionStyle(hwnd);
+  // The app-drawn caption still needs the system menu and MIN/MAX styles for
+  // native commands and Windows 11 snap layouts while the title bar is hidden.
+  const bool system_menu = policy.visible || GetPropW(hwnd, kTitleBarHiddenProperty);
+  if (system_menu) style |= WS_SYSMENU;
+  else style &= ~WS_SYSMENU;
+  SetCaptionStyle(hwnd, style);
+  if (HMENU menu = GetSystemMenu(hwnd, FALSE)) {
+    EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND |
+        (policy.closable ? MF_ENABLED : (MF_DISABLED | MF_GRAYED)));
+    DrawMenuBar(hwnd);
+  }
+}
+
+// Emits the full-screen pair; defined with the rest of the window events in
+// window_manager_windows.cpp.
+void NotifyWindowFullScreenChanged(HWND hwnd, bool is_full_screen);
+
+// The frame bits taken away while a window is full screen, and put back afterwards.
+static constexpr LONG_PTR kFullScreenRemovedStyle = WS_CAPTION | WS_THICKFRAME;
+static constexpr LONG_PTR kFullScreenRemovedExStyle =
+    WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE;
+
+// Adds or removes the window's taskbar button. The shell owns that button, so this is
+// the only way to change it on a window that is already on screen; the window style
+// alternative (WS_EX_TOOLWINDOW) only takes effect while the window is hidden and also
+// drops it from Alt+Tab.
+static void ApplyTaskbarVisibility(HWND hwnd, bool is_visible) {
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  ITaskbarList* taskbar = nullptr;
+  if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                 IID_PPV_ARGS(&taskbar)))) {
+    if (SUCCEEDED(taskbar->HrInit())) {
+      if (is_visible)
+        taskbar->AddTab(hwnd);
+      else
+        taskbar->DeleteTab(hwnd);
+    }
+    taskbar->Release();
+  }
+  // RPC_E_CHANGED_MODE says the thread already belongs to another apartment, which is
+  // then not ours to leave.
+  if (SUCCEEDED(com))
+    CoUninitialize();
+}
+
+#ifndef NATIVEAPI_ENABLE_WINUI3
+// Keep the native sizing/caption styles, but give the top non-client band to the
+// content (WM_NCCALCSIZE) when the title bar is hidden. While the compositor draws the
+// frame the rest of the sizing frame remains, and the top edge stays resizable through
+// hit testing: the window answers HTTOP there, and child windows covering the content
+// let the hit test through to it. Without the compositor's frame (no shadow, a custom
+// shadow, a shape) the content takes the whole window and every edge is hit-tested so.
+
+// The resize hit code for a screen point on a resize edge of `root` that the system no
+// longer hit-tests itself, or 0.
+static LRESULT HiddenFrameResizeHit(HWND root, LPARAM point) {
+  if (!GetPropW(root, kTitleBarHiddenProperty) || IsZoomed(root) ||
+      !(GetWindowLongPtrW(root, GWL_STYLE) & WS_THICKFRAME))
+    return 0;
+  RECT window;
+  GetWindowRect(root, &window);
+  const bool frameless = GetPropW(root, kFramelessClientProperty) != nullptr;
+  int frame;
+  if (frameless) {
+    // The system's resize border (SM_CXSIZEFRAME plus SM_CXPADDEDBORDER) at 96 DPI.
+    frame = static_cast<int>(std::lround(8 * GetScaleFactorForWindow(root)));
+  } else {
+    // The sizing frame is as thick at the top as on the left, where it is still in place.
+    POINT client_origin = {0, 0};
+    ClientToScreen(root, &client_origin);
+    frame = client_origin.x - window.left;
+  }
+  // GET_X_LPARAM / GET_Y_LPARAM, without <windowsx.h>: its IsMaximized() and
+  // IsMinimized() macros would rename Window's methods of the same name.
+  const int x = static_cast<short>(LOWORD(point));
+  const int y = static_cast<short>(HIWORD(point));
+  if (y < window.top || y >= window.bottom || x < window.left || x >= window.right) return 0;
+  const bool top = y < window.top + frame;
+  const bool left = x < window.left + frame;
+  const bool right = x >= window.right - frame;
+  // With a frame in place only the top band is the client's; the system answers the rest.
+  if (!frameless) {
+    if (!top) return 0;
+    return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
+  }
+  const bool bottom = y >= window.bottom - frame;
+  if (top) return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
+  if (bottom) return left ? HTBOTTOMLEFT : right ? HTBOTTOMRIGHT : HTBOTTOM;
+  if (left) return HTLEFT;
+  if (right) return HTRIGHT;
+  return 0;
+}
+
+// Whether a screen point (WM_NCHITTEST's lParam) is on the app-drawn maximize
+// button of |root|, and where in its content area, in physical pixels.
+static bool IsOverMaximizeButton(HWND root, LPARAM point, POINT* client = nullptr) {
+  const auto* area = static_cast<MaximizeButtonArea*>(GetPropW(root, kMaximizeButtonProperty));
+  if (!area) return false;
+  POINT local = {static_cast<short>(LOWORD(point)), static_cast<short>(HIWORD(point))};
+  if (!ScreenToClient(root, &local)) return false;
+  const double scale = GetScaleFactorForWindow(root);
+  const double x = local.x / scale, y = local.y / scale;
+  const Rectangle& b = area->bounds;
+  if (x < b.x || y < b.y || x >= b.x + b.width || y >= b.y + b.height) return false;
+  if (client) *client = local;
+  return true;
+}
+
+// The innermost visible, enabled content window under a client point of |root|.
+static HWND ContentWindowAt(HWND root, POINT client, POINT* local) {
+  HWND target = root;
+  POINT at = client;
+  for (int depth = 0; depth < 32; ++depth) {
+    HWND child = ChildWindowFromPointEx(target, at, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED |
+                                                        CWP_SKIPTRANSPARENT);
+    if (!child || child == target) break;
+    MapWindowPoints(target, child, &at, 1);
+    target = child;
+  }
+  *local = at;
+  return target;
+}
+
+// Passes a non-client mouse message over the maximize button on to the content
+// as the client message it would have been, so the app's button sees it.
+static void ForwardToContent(HWND root, MaximizeButtonArea* area, UINT message, LPARAM point) {
+  POINT client = {static_cast<short>(LOWORD(point)), static_cast<short>(HIWORD(point))};
+  ScreenToClient(root, &client);
+  POINT local = {};
+  HWND target = ContentWindowAt(root, client, &local);
+  WPARAM keys = 0;
+  if (GetKeyState(VK_LBUTTON) < 0) keys |= MK_LBUTTON;
+  if (GetKeyState(VK_RBUTTON) < 0) keys |= MK_RBUTTON;
+  if (GetKeyState(VK_MBUTTON) < 0) keys |= MK_MBUTTON;
+  if (GetKeyState(VK_SHIFT) < 0) keys |= MK_SHIFT;
+  if (GetKeyState(VK_CONTROL) < 0) keys |= MK_CONTROL;
+  if (message == WM_LBUTTONDOWN) keys |= MK_LBUTTON;
+  if (message == WM_LBUTTONUP) keys &= ~static_cast<WPARAM>(MK_LBUTTON);
+  area->hovered = target;
+  SendMessageW(target, message, keys, MAKELPARAM(local.x, local.y));
+}
+
+// The maximize button's share of the window procedure: answer the hit test,
+// and hand hover, press and release to the content instead of letting
+// DefWindowProc run its caption-button loop (it would draw a classic button
+// and maximize on its own).
+static std::optional<LRESULT> HandleMaximizeButtonArea(HWND hwnd, UINT message, WPARAM wp,
+                                                       LPARAM lp) {
+  auto* area = static_cast<MaximizeButtonArea*>(GetPropW(hwnd, kMaximizeButtonProperty));
+  if (!area) return std::nullopt;
+  switch (message) {
+    case WM_NCHITTEST:
+      if (!IsOverMaximizeButton(hwnd, lp)) return std::nullopt;
+      // A resize border overlapping the button keeps working.
+      if (GetPropW(hwnd, kTitleBarHiddenProperty) && HiddenFrameResizeHit(hwnd, lp) != 0)
+        return std::nullopt;
+      return HTMAXBUTTON;
+    case WM_NCMOUSEMOVE:
+      if (wp != HTMAXBUTTON) break;
+      if (!area->tracking_leave) {
+        TRACKMOUSEEVENT track = {sizeof(track), TME_LEAVE | TME_NONCLIENT, hwnd, 0};
+        area->tracking_leave = TrackMouseEvent(&track) != FALSE;
+      }
+      ForwardToContent(hwnd, area, WM_MOUSEMOVE, lp);
+      return 0;
+    case WM_NCMOUSELEAVE:
+      area->tracking_leave = false;
+      if (area->hovered && IsWindow(area->hovered)) SendMessageW(area->hovered, WM_MOUSELEAVE, 0, 0);
+      area->hovered = nullptr;
+      break;  // DefWindowProc has its own bookkeeping for it.
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK:
+      if (wp != HTMAXBUTTON) break;
+      ForwardToContent(hwnd, area, WM_LBUTTONDOWN, lp);
+      return 0;
+    case WM_NCLBUTTONUP:
+      if (wp != HTMAXBUTTON) break;
+      ForwardToContent(hwnd, area, WM_LBUTTONUP, lp);
+      return 0;
+    default:
+      break;
+  }
+  return std::nullopt;
+}
+
+// Subclass of the child windows of a window with a hidden title bar. A child that
+// covers the content (a Flutter view, for one) is hit-tested before its parent;
+// on a resize edge it steps aside so the parent can answer it.
+static LRESULT CALLBACK TopEdgeChildProc(HWND child, UINT message, WPARAM wp, LPARAM lp,
+                                         UINT_PTR subclass_id, DWORD_PTR) {
+  if (message == WM_NCHITTEST) {
+    // HTTRANSPARENT passes the hit test on to windows of the same thread only.
+    HWND root = GetAncestor(child, GA_ROOT);
+    if (root && (HiddenFrameResizeHit(root, lp) != 0 || IsOverMaximizeButton(root, lp)) &&
+        GetWindowThreadProcessId(root, nullptr) == GetCurrentThreadId())
+      return HTTRANSPARENT;
+  } else if (message == WM_NCDESTROY) {
+    RemoveWindowSubclass(child, TopEdgeChildProc, subclass_id);
+  }
+  return DefSubclassProc(child, message, wp, lp);
+}
+
+static BOOL CALLBACK AttachTopEdgeChild(HWND child, LPARAM) {
+  // Fails for windows of other threads, which cannot be subclassed; that is fine.
+  SetWindowSubclass(child, TopEdgeChildProc, 1, 0);
+  return TRUE;
+}
+
+static std::optional<LRESULT> HandleHiddenTitleBarFrame(HWND hwnd, UINT message, WPARAM wp,
+                                                        LPARAM lp) {
+  if (message == WM_PARENTNOTIFY && LOWORD(wp) == WM_CREATE) {
+    if (GetPropW(hwnd, kTitleBarHiddenProperty)) AttachTopEdgeChild(reinterpret_cast<HWND>(lp), 0);
+    return std::nullopt;
+  }
+  if (!GetPropW(hwnd, kTitleBarHiddenProperty)) return std::nullopt;
+  const bool frameless = GetPropW(hwnd, kFramelessClientProperty) != nullptr;
+  if (message == WM_NCCALCSIZE && !wp) {
+    auto* proposed = reinterpret_cast<RECT*>(lp);
+    const RECT window = *proposed;
+    const LRESULT result = DefSubclassProc(hwnd, message, wp, lp);
+    if (frameless)
+      *proposed = window;
+    else
+      proposed->top = window.top;
+    return result;
+  }
+  if (message == WM_NCCALCSIZE && wp) {
+    auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lp);
+    const RECT proposed = params->rgrc[0];
+    const LRESULT result = DefSubclassProc(hwnd, message, wp, lp);
+    // A full screen window keeps WS_MAXIMIZE when it was maximized, but it has no
+    // frame to hang past the monitor and must cover the taskbar too.
+    if (!IsZoomed(hwnd) || g_full_screen_windows.count(hwnd)) {
+      if (frameless)
+        params->rgrc[0] = proposed;
+      else
+        params->rgrc[0].top = proposed.top;
+      return result;
+    }
+    // The maximized frame extends beyond the work area by its resize borders.
+    // Fit the captionless client to the work area, excluding those borders.
+    MONITORINFO monitor = {sizeof(monitor)};
+    if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
+      params->rgrc[0] = monitor.rcWork;
+    return result;
+  }
+  if (message == WM_NCHITTEST) {
+    const LRESULT hit = DefSubclassProc(hwnd, message, wp, lp);
+    if (hit != HTCLIENT) return hit;
+    const LRESULT edge = HiddenFrameResizeHit(hwnd, lp);
+    return edge != 0 ? edge : hit;
+  }
+  // Without the compositor's frame, DefWindowProc paints the classic frame and caption
+  // that the window style still asks for, straight over the content at the window's
+  // edges: on every step of a resize (WM_NCPAINT), on activation (WM_NCACTIVATE, and the
+  // undocumented WM_NCUAHDRAWCAPTION / WM_NCUAHDRAWFRAME the theme sends) and when the
+  // title or icon changes. The content repaints over it a moment later, so it flickers.
+  // There is no frame to paint, so none of that is let through.
+  if (!frameless) return std::nullopt;
+  constexpr UINT kNcUahDrawCaption = 0x00AE;
+  constexpr UINT kNcUahDrawFrame = 0x00AF;
+  if (message == WM_NCPAINT || message == kNcUahDrawCaption || message == kNcUahDrawFrame)
+    return 0;
+  // lParam -1 keeps the activation handling but skips the repaint.
+  if (message == WM_NCACTIVATE) return DefSubclassProc(hwnd, message, wp, -1);
+  if (message == WM_SETTEXT || message == WM_SETICON) {
+    // These paint the caption right away. Taking WS_VISIBLE off for the call keeps the
+    // paint off the screen without hiding the window (what Chromium does as well).
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (style & WS_VISIBLE) SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_VISIBLE);
+    const LRESULT result = DefSubclassProc(hwnd, message, wp, lp);
+    if (style & WS_VISIBLE) SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    return result;
+  }
+  return std::nullopt;
+}
+#endif
+
+static bool HasWindowRegion(HWND hwnd) {
+  HRGN region = CreateRectRgn(0, 0, 0, 0);
+  if (!region) return false;
+  const bool has_region = GetWindowRgn(hwnd, region) != ERROR;
+  DeleteObject(region);
+  return has_region;
+}
+
+// Removes a region the visual style put on a window with a hidden title bar. Without the
+// compositor's frame the style clips the window to the rounded corners of the classic
+// frame it would draw, which this window does not have. Shapes are left alone.
+static void DropThemeRegion(HWND hwnd) {
+  if (!GetPropW(hwnd, kTitleBarHiddenProperty) || GetPropW(hwnd, kShapedProperty) ||
+      !HasWindowRegion(hwnd))
+    return;
+  // No redraw from SetWindowRgn, and no erase: see SetShape.
+  SetWindowRgn(hwnd, nullptr, FALSE);
+  RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+}
+
+// Who draws a window's frame, decided from its flags in this one place. The compositor
+// draws it, with its shadow (and on Windows 11 the rounded corners and the thin border),
+// unless the window has no shadow, or has a hidden title bar and core draws the shadow:
+// a custom shadow, or a shape, which the compositor's frame would not follow. A window
+// with a hidden title bar and no frame from the compositor has no frame at all
+// (kFramelessClientProperty): the sizing frame would otherwise be painted in the classic
+// theme. `keep_content` keeps the client area where it is on screen when the frame comes or
+// goes, so neither the content nor the shape coordinates move.
+static void UpdateFrameRendering(HWND hwnd, bool keep_content) {
+  const bool hidden = GetPropW(hwnd, kTitleBarHiddenProperty) != nullptr;
+  const bool shadow = GetPropW(hwnd, kNoShadowProperty) == nullptr;
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  // WinUI 3 owns the frame of a window whose title bar it hides.
+  const bool compositor = shadow && !hidden;
+#else
+  const bool compositor = shadow && !(hidden && (GetPropW(hwnd, kExplicitFramelessProperty) ||
+                                                 GetPropW(hwnd, kShapedProperty) ||
+                                                 GetPropW(hwnd, shape_shadow::kConfig)));
+#endif
+  DWMNCRENDERINGPOLICY policy = compositor ? DWMNCRP_USEWINDOWSTYLE : DWMNCRP_DISABLED;
+  DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy, sizeof(policy));
+  // Before the shadow below reads the region for its contour.
+  DropThemeRegion(hwnd);
+  if (hidden && shadow && !compositor)
+    shape_shadow::Refresh(hwnd);
+  else
+    shape_shadow::Clear(hwnd);
+#ifndef NATIVEAPI_ENABLE_WINUI3
+  const bool frameless = hidden && !compositor;
+  if (frameless == (GetPropW(hwnd, kFramelessClientProperty) != nullptr)) return;
+  if (frameless)
+    SetPropW(hwnd, kFramelessClientProperty, reinterpret_cast<HANDLE>(1));
+  else
+    RemovePropW(hwnd, kFramelessClientProperty);
+  if (!keep_content) return;
+  RECT before{};
+  GetClientRect(hwnd, &before);
+  MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&before), 2);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+  // A maximized or full screen window fills its monitor whatever the frame.
+  if (IsZoomed(hwnd) || IsIconic(hwnd) || g_full_screen_windows.count(hwnd)) return;
+  RECT after{}, window{};
+  GetClientRect(hwnd, &after);
+  MapWindowPoints(hwnd, nullptr, reinterpret_cast<POINT*>(&after), 2);
+  GetWindowRect(hwnd, &window);
+  window.left += before.left - after.left;
+  window.top += before.top - after.top;
+  window.right += before.right - after.right;
+  window.bottom += before.bottom - after.bottom;
+  SetWindowPos(hwnd, nullptr, window.left, window.top, window.right - window.left,
+               window.bottom - window.top, SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+#endif
+}
+
+// Native controls and host renderers may call SetFocus() from their mouse-down
+// handler even after MA_NOACTIVATE. Reject that focus at the child as well as
+// the toplevel, without swallowing the mouse message that triggered it.
+static bool RejectBlockedFocus(HWND target, HWND previous) {
+  HWND root = GetAncestor(target, GA_ROOT);
+  if (!(GetWindowLongPtrW(root, GWL_EXSTYLE) & WS_EX_NOACTIVATE)) return false;
+  static thread_local bool restoring = false;
+  if (!restoring) {
+    restoring = true;
+    const bool can_restore = previous && IsWindow(previous) &&
+                             GetAncestor(previous, GA_ROOT) != root &&
+                             GetWindowThreadProcessId(previous, nullptr) == GetCurrentThreadId();
+    SetFocus(can_restore ? previous : nullptr);
+    const auto foreground = static_cast<HWND>(GetPropW(root, kFocusReturnWindowProperty));
+    if (foreground && IsWindow(foreground) && foreground != root &&
+        GetForegroundWindow() == root)
+      SetForegroundWindow(foreground);
+    restoring = false;
+  }
+  return true;
+}
+
+static LRESULT CALLBACK FocusPolicyChildProc(HWND child, UINT message, WPARAM wp, LPARAM lp,
+                                             UINT_PTR subclass_id, DWORD_PTR) {
+  if (message == WM_SETFOCUS && RejectBlockedFocus(child, reinterpret_cast<HWND>(wp)))
+    return 0;
+  if (message == WM_NCDESTROY)
+    RemoveWindowSubclass(child, FocusPolicyChildProc, subclass_id);
+  return DefSubclassProc(child, message, wp, lp);
+}
+
+static BOOL CALLBACK InstallFocusPolicyChild(HWND child, LPARAM) {
+  SetWindowSubclass(child, FocusPolicyChildProc,
+                    reinterpret_cast<UINT_PTR>(&FocusPolicyChildProc), 0);
+  return TRUE;
+}
+
+// Registry entries follow the HWND lifetime, not any one C++ wrapper.
+static LRESULT WindowLifetimeMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
+                                     UINT_PTR subclass_id, DWORD_PTR reference);
+static LRESULT CALLBACK WindowLifetimeProc(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
+                                           UINT_PTR subclass_id, DWORD_PTR reference) {
+  // Changes WindowPropertyChangedEvent reports, whoever makes them: the text,
+  // the styles, and a Z-order change that may move the window in or out of the
+  // topmost band.
+  const auto* pos = message == WM_WINDOWPOSCHANGED ? reinterpret_cast<const WINDOWPOS*>(lp)
+                                                   : nullptr;
+  const bool property_change = message == WM_SETTEXT || message == WM_STYLECHANGED ||
+                               (pos && !(pos->flags & SWP_NOZORDER));
+  const LRESULT result = WindowLifetimeMessage(hwnd, message, wp, lp, subclass_id, reference);
+  if (message == WM_DPICHANGED && IsWindow(hwnd))
+    detail::HandleDockMessage(hwnd, message, wp, lp);
+  if (property_change && IsWindow(hwnd)) {
+    Window window(hwnd);
+    detail::WindowPropertyDispatch::Refresh(window);
+  }
+  return result;
+}
+static LRESULT WindowLifetimeMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
+                                     UINT_PTR subclass_id, DWORD_PTR reference) {
+  if (message == WM_NCDESTROY) {
+    detail::RemoveDockOnDestroy(hwnd);
+    delete static_cast<ControlButtonPolicy*>(RemovePropW(hwnd, kControlPolicyProperty));
+    RemoveWindowSubclass(hwnd, WindowLifetimeProc, subclass_id);
+    RemovePropW(hwnd, kWindowIdProperty);
+    RemovePropW(hwnd, kTitleBarHiddenProperty);
+    RemovePropW(hwnd, kNoShadowProperty);
+    RemovePropW(hwnd, kFramelessClientProperty);
+    RemovePropW(hwnd, kExplicitFramelessProperty);
+    RemovePropW(hwnd, kShapedProperty);
+    delete static_cast<WindowShadow*>(RemovePropW(hwnd, shape_shadow::kConfig));
+    RemovePropW(hwnd, kHiddenFromTaskbarProperty);
+    RemovePropW(hwnd, kNonFocusableProperty);
+    RemovePropW(hwnd, kNonActivatingProperty);
+    RemovePropW(hwnd, kFocusReturnWindowProperty);
+    RemovePropW(hwnd, kBlurReturnWindowProperty);
+    RemovePropW(hwnd, kShowMaximizedProperty);
+    delete static_cast<MaximizeButtonArea*>(RemovePropW(hwnd, kMaximizeButtonProperty));
+    RemovePropW(hwnd, kVisualEffectProperty);
+    RemovePropW(hwnd, kCornerPreferenceProperty);
+    RemovePropW(hwnd, kBackgroundColorProperty);
+    RemovePropW(hwnd, kTranslucentBackgroundProperty);
+    g_full_screen_windows.erase(hwnd);
+    const auto result = DefSubclassProc(hwnd, message, wp, lp);
+    WindowRegistry::GetInstance().Remove(static_cast<WindowId>(reference));
+    return result;
+  }
+  detail::HandleDockMessage(hwnd, message, wp, lp);
+  if (message == WM_MOUSEACTIVATE &&
+      (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE)) {
+    // Keep delivering the click (MA_NOACTIVATEANDEAT would swallow it).
+    HWND foreground = GetForegroundWindow();
+    if (foreground && foreground != hwnd)
+      SetPropW(hwnd, kFocusReturnWindowProperty, foreground);
+    return MA_NOACTIVATE;
+  }
+  if (message == WM_SETFOCUS && RejectBlockedFocus(hwnd, reinterpret_cast<HWND>(wp)))
+    return 0;
+  if (message == WM_PARENTNOTIFY && LOWORD(wp) == WM_CREATE &&
+      (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE))
+    EnumChildWindows(hwnd, InstallFocusPolicyChild, 0);
+  if (message == WM_WINDOWPOSCHANGING && GetPropW(hwnd, kShowMaximizedProperty)) {
+    auto* pos = reinterpret_cast<WINDOWPOS*>(lp);
+    if (pos && (pos->flags & SWP_SHOWWINDOW)) {
+      // Whatever shows it would show it restored (SW_SHOWNORMAL restores even a
+      // maximized window): keep it hidden and show it maximized right after.
+      pos->flags &= ~SWP_SHOWWINDOW;
+      PostMessageW(hwnd, ShowMaximizedMessage(), 0, 0);
+    }
+  }
+  if (message == ShowMaximizedMessage()) {
+    if (RemovePropW(hwnd, kShowMaximizedProperty)) ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    return 0;
+  }
+  if (message == WM_WINDOWPOSCHANGED) {
+    const auto* pos = reinterpret_cast<const WINDOWPOS*>(lp);
+    const LRESULT result = DefSubclassProc(hwnd, message, wp, lp);
+    // The shell gives a window a fresh taskbar button every time it is shown, so a
+    // window that is meant to stay out of the taskbar has to leave it again.
+    if (pos && (pos->flags & SWP_SHOWWINDOW) && GetPropW(hwnd, kHiddenFromTaskbarProperty))
+      ApplyTaskbarVisibility(hwnd, false);
+    // The visual style sets its region while handling this very message.
+    DropThemeRegion(hwnd);
+    return result;
+  }
+#ifndef NATIVEAPI_ENABLE_WINUI3
+  if (auto handled = HandleMaximizeButtonArea(hwnd, message, wp, lp)) return *handled;
+  if (message == WM_PARENTNOTIFY && LOWORD(wp) == WM_CREATE &&
+      GetPropW(hwnd, kMaximizeButtonProperty))
+    AttachTopEdgeChild(reinterpret_cast<HWND>(lp), 0);
+  if (message == WM_NCCALCSIZE || message == WM_NCHITTEST || message == WM_PARENTNOTIFY ||
+      message == WM_NCACTIVATE || message == WM_NCPAINT || message == 0x00AE ||
+      message == 0x00AF || message == WM_SETTEXT || message == WM_SETICON) {
+    if (auto handled = HandleHiddenTitleBarFrame(hwnd, message, wp, lp)) return *handled;
+  }
+#endif
+  return DefSubclassProc(hwnd, message, wp, lp);
+}
+// Returns true the first time, when the HWND was not tracked yet.
+static bool TrackWindowLifetime(HWND hwnd, WindowId id) {
+  DWORD_PTR existing = 0;
+  const bool tracked = GetWindowSubclass(hwnd, WindowLifetimeProc,
+                                         reinterpret_cast<UINT_PTR>(&WindowLifetimeProc), &existing);
+  SetWindowSubclass(hwnd, WindowLifetimeProc, reinterpret_cast<UINT_PTR>(&WindowLifetimeProc), id);
+  return !tracked;
+}
+
+// Forward declaration
+static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+// Private implementation class
+class Window::Impl {
+ public:
+  Impl(HWND hwnd, WindowId id)
+      : hwnd_(hwnd), window_id_(id) {}
+  HWND hwnd_;
+  WindowId window_id_;
+  Size min_size_{0, 0};
+  Size max_size_{0, 0};
+  int min_max_handler_id_ = 0;
+  double aspect_ratio_ = 0.0;
+  int aspect_ratio_handler_id_ = 0;
+  bool always_on_bottom_ = false;
+  int always_on_bottom_handler_id_ = 0;
+};
+
+// Custom window procedure to handle window messages
+static LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+  switch (uMsg) {
+    case WM_ERASEBKGND:
+      // The compositor draws a visual effect where the client area is black with no
+      // alpha, which is what GDI's black is. The class brush would paint over it.
+      if (GetPropW(hwnd, kVisualEffectProperty)) {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        FillRect(reinterpret_cast<HDC>(wParam), &client,
+                 static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        return 1;
+      }
+      if (const auto stored =
+              reinterpret_cast<uintptr_t>(GetPropW(hwnd, kBackgroundColorProperty))) {
+        RECT client;
+        GetClientRect(hwnd, &client);
+        HBRUSH brush = CreateSolidBrush(
+            RGB((stored >> 16) & 0xFF, (stored >> 8) & 0xFF, stored & 0xFF));
+        FillRect(reinterpret_cast<HDC>(wParam), &client, brush);
+        DeleteObject(brush);
+        return 1;
+      }
+      return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    case WM_WINDOWPOSCHANGING: {
+      // Intercept visibility changes BEFORE they happen (pre-show/hide "swizzle")
+      WINDOWPOS* pos = reinterpret_cast<WINDOWPOS*>(lParam);
+      if (pos) {
+        // Get window ID from window's custom property (stored during window creation)
+        HANDLE prop_handle = GetPropW(hwnd, kWindowIdProperty);
+        if (prop_handle) {
+          WindowId window_id = static_cast<WindowId>(reinterpret_cast<uintptr_t>(prop_handle));
+          if (window_id != IdAllocator::kInvalidId) {
+            auto& manager = WindowManager::GetInstance();
+            bool hook_handled = false;
+
+            if (pos->flags & SWP_SHOWWINDOW) {
+              if (manager.HasWillShowHook()) {
+                manager.HandleWillShow(window_id);
+                hook_handled = true;
+              }
+            }
+            if (pos->flags & SWP_HIDEWINDOW) {
+              if (manager.HasWillHideHook()) {
+                manager.HandleWillHide(window_id);
+                hook_handled = true;
+              }
+            }
+
+            // If hook handled it, cancel the visibility change
+            if (hook_handled) {
+              pos->flags &= ~(SWP_SHOWWINDOW | SWP_HIDEWINDOW);
+            }
+          }
+        }
+      }
+      return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    }
+    case WM_SHOWWINDOW:
+      return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    case WM_DPICHANGED: {
+      // Moved onto a monitor with another scale factor: take the size Windows
+      // suggests for it, so the window keeps its logical size, as a per-monitor
+      // DPI aware window should. Window::SetBounds() corrects it afterwards
+      // when it asked for a size of its own.
+      const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+      SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+                   suggested->right - suggested->left, suggested->bottom - suggested->top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+      return 0;
+    }
+    case WM_CLOSE:
+      DestroyWindow(hwnd);
+      return 0;
+    case WM_DESTROY:
+      PostQuitMessage(0);
+      return 0;
+    default:
+      return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+  }
+}
+
+Window::Window() {
+  // Create a new window with default settings
+  HINSTANCE hInstance = GetModuleHandle(nullptr);
+
+  // Register window class if not already registered
+  static bool class_registered = false;
+  static std::wstring wclass_name = StringToWString("NativeAPIWindow");
+
+  if (!class_registered) {
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = wclass_name.c_str();
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+
+    if (RegisterClassW(&wc)) {
+      class_registered = true;
+    } else {
+      DWORD error = GetLastError();
+      if (error != ERROR_CLASS_ALREADY_EXISTS) {
+        std::cerr << "Failed to register window class. Error: " << error << std::endl;
+        // Allocate ID even for failed window creation to maintain consistency
+        WindowId id = IdAllocator::Allocate<Window>();
+        pimpl_ = std::make_unique<Impl>(nullptr, id);
+        return;
+      }
+      class_registered = true;
+    }
+  }
+
+  // Create the window
+  DWORD style = WS_OVERLAPPEDWINDOW;
+  DWORD exStyle = 0;
+
+  HWND hwnd = CreateWindowExW(exStyle, wclass_name.c_str(), L"", style, CW_USEDEFAULT,
+                              CW_USEDEFAULT, 800, 600, nullptr, nullptr, hInstance, nullptr);
+
+  if (!hwnd) {
+    std::cerr << "Failed to create window. Error: " << GetLastError() << std::endl;
+    // Allocate ID even for failed window creation to maintain consistency
+    WindowId id = IdAllocator::Allocate<Window>();
+    pimpl_ = std::make_unique<Impl>(nullptr, id);
+    return;
+  }
+
+  // Allocate window ID using IdAllocator
+  WindowId id = IdAllocator::Allocate<Window>();
+  if (id == IdAllocator::kInvalidId) {
+    std::cerr << "Failed to allocate window ID" << std::endl;
+    DestroyWindow(hwnd);
+    pimpl_ = std::make_unique<Impl>(nullptr, IdAllocator::kInvalidId);
+    return;
+  }
+
+  // Store window ID as a custom property in HWND for easy retrieval in WindowProc
+  SetPropW(hwnd, kWindowIdProperty, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(id)));
+
+  // Create the instance with allocated ID
+  pimpl_ = std::make_unique<Impl>(hwnd, id);
+  if (TrackWindowLifetime(hwnd, id)) {
+    // The values later changes are compared with.
+    detail::WindowPropertyDispatch::Refresh(*this);
+    detail::WindowPropertyDispatch::RefreshOcclusion(*this);
+  }
+
+  // Note: Window registration in WindowRegistry is now handled by WindowManager::GetAll()
+  // which uses EnumWindows to discover and register all windows dynamically
+}
+
+Window::Window(void* native_window) {
+  HWND hwnd = static_cast<HWND>(native_window);
+
+  if (!hwnd) {
+    // Allocate ID even for null window to maintain consistency
+    WindowId id = IdAllocator::Allocate<Window>();
+    pimpl_ = std::make_unique<Impl>(nullptr, id);
+    return;
+  }
+
+  // Check if window already has an ID stored as a custom property
+  HANDLE prop_handle = GetPropW(hwnd, kWindowIdProperty);
+  WindowId id = IdAllocator::kInvalidId;
+
+  if (prop_handle) {
+    id = static_cast<WindowId>(reinterpret_cast<uintptr_t>(prop_handle));
+  }
+
+  if (id == IdAllocator::kInvalidId || id == 0) {
+    // Allocate new ID if window doesn't have one
+    id = IdAllocator::Allocate<Window>();
+    if (id == IdAllocator::kInvalidId) {
+      std::cerr << "Failed to allocate window ID" << std::endl;
+      pimpl_ = std::make_unique<Impl>(nullptr, IdAllocator::kInvalidId);
+      return;
+    }
+    // Store the ID as a custom property in HWND
+    SetPropW(hwnd, kWindowIdProperty, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(id)));
+  }
+
+  pimpl_ = std::make_unique<Impl>(hwnd, id);
+  if (TrackWindowLifetime(hwnd, id)) {
+    // The values later changes are compared with.
+    detail::WindowPropertyDispatch::Refresh(*this);
+    detail::WindowPropertyDispatch::RefreshOcclusion(*this);
+  }
+
+  // Note: Window registration in WindowRegistry is now handled by WindowManager::GetAll()
+  // which uses EnumWindows to discover and register all windows dynamically
+}
+
+Window::~Window() {
+  ShutdownEmitter();
+  if (pimpl_ && pimpl_->window_id_ != IdAllocator::kInvalidId) {
+    // Unregister WM_GETMINMAXINFO handler if registered
+    if (pimpl_->min_max_handler_id_ != 0 && pimpl_->hwnd_) {
+      WindowMessageDispatcher::GetInstance().UnregisterHandler(
+          pimpl_->min_max_handler_id_);
+    }
+    if (pimpl_->aspect_ratio_handler_id_ != 0 && pimpl_->hwnd_) {
+      WindowMessageDispatcher::GetInstance().UnregisterHandler(
+          pimpl_->aspect_ratio_handler_id_);
+    }
+    if (pimpl_->always_on_bottom_handler_id_ != 0 && pimpl_->hwnd_) {
+      WindowMessageDispatcher::GetInstance().UnregisterHandler(
+          pimpl_->always_on_bottom_handler_id_);
+    }
+
+
+  }
+}
+
+static void RememberBlurReturnWindow(HWND hwnd) {
+  HWND foreground = GetForegroundWindow();
+  if (foreground) foreground = GetAncestor(foreground, GA_ROOT);
+  // Already in front (a repeated Focus()/Show()): keep the earlier target.
+  if (foreground == hwnd) return;
+  if (foreground)
+    SetPropW(hwnd, kBlurReturnWindowProperty, foreground);
+  else
+    RemovePropW(hwnd, kBlurReturnWindowProperty);
+}
+
+// A window Blur() may hand the foreground to: a live, visible, enabled,
+// unminimized toplevel that is neither |hwnd| nor one of its owned windows.
+static bool CanTakeForeground(HWND candidate, HWND hwnd) {
+  if (!candidate || candidate == hwnd || !IsWindow(candidate) || !IsWindowVisible(candidate) ||
+      IsIconic(candidate) || !IsWindowEnabled(candidate))
+    return false;
+  for (HWND owner = GetWindow(candidate, GW_OWNER); owner; owner = GetWindow(owner, GW_OWNER)) {
+    if (owner == hwnd) return false;
+  }
+  if (GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_NOACTIVATE) return false;
+  BOOL cloaked = FALSE;
+  // Windows on another virtual desktop and suspended UWP frames are cloaked.
+  return FAILED(DwmGetWindowAttribute(candidate, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) ||
+         !cloaked;
+}
+
+// The next window down the Z order that the shell would activate itself.
+static HWND NextForegroundCandidate(HWND hwnd) {
+  for (HWND next = GetWindow(hwnd, GW_HWNDNEXT); next; next = GetWindow(next, GW_HWNDNEXT)) {
+    if (GetWindowLongPtrW(next, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) continue;
+    if (CanTakeForeground(next, hwnd)) return next;
+  }
+  return nullptr;
+}
+
+void Window::Focus() {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsFocusable()) return;
+  RememberBlurReturnWindow(hwnd);
+  if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+  if (!SetForegroundWindow(hwnd) || GetForegroundWindow() != hwnd) {
+    // The foreground lock refuses a process that is not in front (the taskbar
+    // button only flashes). Sharing input state with the foreground thread
+    // makes the request count as coming from it.
+    HWND foreground = GetForegroundWindow();
+    const DWORD foreground_thread =
+        foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    const DWORD self = GetCurrentThreadId();
+    const bool attached = foreground_thread && foreground_thread != self &&
+                          AttachThreadInput(self, foreground_thread, TRUE);
+    BringWindowToTop(hwnd);
+    SetForegroundWindow(hwnd);
+    if (attached) AttachThreadInput(self, foreground_thread, FALSE);
+  }
+  // Hosts such as Flutter keep the keyboard focus on a child HWND; only take it
+  // when nothing inside this window has it.
+  HWND focused = GetFocus();
+  if (GetForegroundWindow() == hwnd && (!focused || GetAncestor(focused, GA_ROOT) != hwnd))
+    SetFocus(hwnd);
+}
+
+void Window::Blur() {
+  HWND hwnd = pimpl_->hwnd_;
+  // Blurring a window without the keyboard focus must not move focus at all.
+  if (!hwnd || GetForegroundWindow() != hwnd) return;
+  HWND target = static_cast<HWND>(RemovePropW(hwnd, kBlurReturnWindowProperty));
+  if (!CanTakeForeground(target, hwnd)) target = NextForegroundCandidate(hwnd);
+  // Being in front, this process may hand the foreground to any window.
+  if (target && SetForegroundWindow(target)) return;
+  SetFocus(nullptr);
+}
+
+bool Window::IsFocused() const {
+  if (!pimpl_->hwnd_ || GetForegroundWindow() != pimpl_->hwnd_) return false;
+  // A foreground window may deliberately have no keyboard focus. Flutter and
+  // other hosts put focus on a child HWND, so inspect the whole toplevel.
+  GUITHREADINFO info = {};
+  info.cbSize = sizeof(info);
+  return GetGUIThreadInfo(GetWindowThreadProcessId(pimpl_->hwnd_, nullptr), &info) &&
+         info.hwndFocus && GetAncestor(info.hwndFocus, GA_ROOT) == pimpl_->hwnd_;
+}
+
+void Window::Show() {
+  if (pimpl_->hwnd_) {
+    if (IsFocusable()) {
+      RememberBlurReturnWindow(pimpl_->hwnd_);
+      ShowWindow(pimpl_->hwnd_, SW_SHOW);
+      SetForegroundWindow(pimpl_->hwnd_);
+    } else {
+      ShowWindow(pimpl_->hwnd_, SW_SHOWNOACTIVATE);
+    }
+  }
+}
+
+void Window::ShowInactive() {
+  if (pimpl_->hwnd_) {
+    ShowWindow(pimpl_->hwnd_, SW_SHOWNOACTIVATE);
+  }
+}
+
+void Window::Hide() {
+  if (pimpl_->hwnd_) {
+    ShowWindow(pimpl_->hwnd_, SW_HIDE);
+  }
+}
+
+bool Window::IsVisible() const {
+  return pimpl_->hwnd_ && IsWindowVisible(pimpl_->hwnd_);
+}
+
+static bool IsCloakedWindow(HWND hwnd) {
+  BOOL cloaked = FALSE;
+  return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+         cloaked;
+}
+
+// The rectangle a window paints, without the invisible resize borders that
+// GetWindowRect() includes on Windows 10 and later.
+static RECT PaintedBounds(HWND hwnd) {
+  RECT rect = {};
+  if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect))))
+    GetWindowRect(hwnd, &rect);
+  return rect;
+}
+
+// Whether a window above another one hides what is under it.
+static bool CoversWindowsBelow(HWND hwnd) {
+  if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || IsCloakedWindow(hwnd)) return false;
+  const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  if (ex_style & WS_EX_TRANSPARENT) return false;  // Click-through overlays.
+  if (ex_style & WS_EX_LAYERED) {
+    // Only a layered window with constant full opacity covers; per-pixel alpha
+    // (UpdateLayeredWindow) fails this query and may be see-through anywhere.
+    BYTE alpha = 0;
+    DWORD flags = 0;
+    if (!GetLayeredWindowAttributes(hwnd, nullptr, &alpha, &flags) || (flags & LWA_COLORKEY) ||
+        ((flags & LWA_ALPHA) && alpha != 255))
+      return false;
+  }
+  return true;
+}
+
+WindowOcclusionState Window::GetOcclusionState() const {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsWindow(hwnd)) return WindowOcclusionState::Unknown;
+  if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || IsCloakedWindow(hwnd))
+    return WindowOcclusionState::Occluded;
+  const RECT bounds = PaintedBounds(hwnd);
+  HRGN visible = CreateRectRgnIndirect(&bounds);
+  HRGN screens = CreateRectRgn(0, 0, 0, 0);
+  EnumDisplayMonitors(
+      nullptr, nullptr,
+      [](HMONITOR, HDC, LPRECT monitor, LPARAM data) -> BOOL {
+        HRGN area = CreateRectRgnIndirect(monitor);
+        CombineRgn(reinterpret_cast<HRGN>(data), reinterpret_cast<HRGN>(data), area, RGN_OR);
+        DeleteObject(area);
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(screens));
+  int kind = CombineRgn(visible, visible, screens, RGN_AND);
+  DeleteObject(screens);
+  // Windows above this one, nearest first; stop once nothing is left.
+  for (HWND above = GetWindow(hwnd, GW_HWNDPREV); above && kind != NULLREGION && kind != ERROR;
+       above = GetWindow(above, GW_HWNDPREV)) {
+    if (!CoversWindowsBelow(above)) continue;
+    const RECT cover = PaintedBounds(above);
+    HRGN area = CreateRectRgnIndirect(&cover);
+    kind = CombineRgn(visible, visible, area, RGN_DIFF);
+    DeleteObject(area);
+  }
+  DeleteObject(visible);
+  if (kind == ERROR) return WindowOcclusionState::Unknown;
+  return kind == NULLREGION ? WindowOcclusionState::Occluded : WindowOcclusionState::Visible;
+}
+
+bool Window::IsOcclusionStateSupported() {
+  return true;
+}
+
+void Window::Maximize() {
+  if (!pimpl_->hwnd_ || IsMaximized()) return;
+  if (!IsWindowVisible(pimpl_->hwnd_)) {
+    // SW_MAXIMIZE would show it now, before its content is ready, and the
+    // host's own show (a Flutter runner's, on its first frame) would restore
+    // it. Shown maximized when it is shown; see kShowMaximizedProperty.
+    SetPropW(pimpl_->hwnd_, kShowMaximizedProperty, reinterpret_cast<HANDLE>(1));
+    return;
+  }
+  ShowWindow(pimpl_->hwnd_, SW_MAXIMIZE);
+}
+
+void Window::Unmaximize() {
+  if (pimpl_->hwnd_ && RemovePropW(pimpl_->hwnd_, kShowMaximizedProperty)) return;
+  if (pimpl_->hwnd_ && IsMaximized()) {
+    ShowWindow(pimpl_->hwnd_, SW_RESTORE);
+  }
+}
+
+bool Window::IsMaximized() const {
+  if (!pimpl_->hwnd_)
+    return false;
+  if (GetPropW(pimpl_->hwnd_, kShowMaximizedProperty)) return true;  // To be shown maximized.
+  WINDOWPLACEMENT wp = {};
+  wp.length = sizeof(WINDOWPLACEMENT);
+  GetWindowPlacement(pimpl_->hwnd_, &wp);
+  return wp.showCmd == SW_MAXIMIZE;
+}
+
+void Window::Minimize() {
+  if (pimpl_->hwnd_ && !IsMinimized()) {
+    ShowWindow(pimpl_->hwnd_, SW_MINIMIZE);
+  }
+}
+
+void Window::Restore() {
+  if (pimpl_->hwnd_ && IsMinimized()) {
+    ShowWindow(pimpl_->hwnd_, SW_RESTORE);
+  }
+}
+
+bool Window::IsMinimized() const {
+  if (!pimpl_->hwnd_)
+    return false;
+  // GetWindowPlacement() reports a minimized window as SW_SHOWMINIMIZED, never
+  // as SW_MINIMIZE, so ask the window itself.
+  return IsIconic(pimpl_->hwnd_) != FALSE;
+}
+
+void Window::SetFullScreen(bool is_full_screen) {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      window.SetFullScreen(is_full_screen);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  if (!pimpl_->hwnd_)
+    return;
+
+  HWND hwnd = pimpl_->hwnd_;
+  const auto saved = g_full_screen_windows.find(hwnd);
+
+  if (is_full_screen) {
+    if (saved != g_full_screen_windows.end())
+      return;
+
+    MONITORINFO monitor = {sizeof(monitor)};
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
+      return;
+
+    FullScreenState state = {};
+    state.placement.length = sizeof(state.placement);
+    GetWindowPlacement(hwnd, &state.placement);
+    state.style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    state.ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    g_full_screen_windows[hwnd] = state;
+
+    SetWindowLongPtrW(hwnd, GWL_STYLE, state.style & ~kFullScreenRemovedStyle);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, state.ex_style & ~kFullScreenRemovedExStyle);
+    SetWindowPos(hwnd, nullptr, monitor.rcMonitor.left, monitor.rcMonitor.top,
+                 monitor.rcMonitor.right - monitor.rcMonitor.left,
+                 monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    NotifyWindowFullScreenChanged(hwnd, true);
+    return;
+  }
+
+  if (saved == g_full_screen_windows.end())
+    return;
+
+  const FullScreenState state = saved->second;
+  g_full_screen_windows.erase(saved);
+  // Put back the bits that were taken away, rather than the whole style word: the
+  // window may have been reshaped while it was full screen (the title bar hidden, say)
+  // and that is not this method's to undo.
+  SetWindowLongPtrW(hwnd, GWL_STYLE,
+                    GetWindowLongPtrW(hwnd, GWL_STYLE) | (state.style & kFullScreenRemovedStyle));
+  SetWindowLongPtrW(
+      hwnd, GWL_EXSTYLE,
+      GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | (state.ex_style & kFullScreenRemovedExStyle));
+  SetWindowPlacement(hwnd, &state.placement);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  if (auto* policy = ControlPolicy(hwnd, false)) ApplyControlPolicy(hwnd, *policy);
+  NotifyWindowFullScreenChanged(hwnd, false);
+}
+
+bool Window::IsFullScreen() const {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      return window.IsFullScreen();
+    });
+  }
+  return pimpl_->hwnd_ && g_full_screen_windows.count(pimpl_->hwnd_) != 0;
+}
+
+// Moves and sizes a window to a physical rectangle. Moving it onto a monitor
+// with another scale factor makes Windows send WM_DPICHANGED, and the window's
+// handler (ours, or the Flutter runner's) resizes the window to what Windows
+// suggests for the new factor. That is not the size asked for, which already
+// accounts for the new factor: put the rectangle back once the DPI has changed.
+static void MoveWindowTo(HWND hwnd, const RECT& target) {
+  const UINT dpi_before = static_cast<UINT>(std::lround(GetScaleFactorForWindow(hwnd) * 96));
+  SetWindowPos(hwnd, nullptr, target.left, target.top, target.right - target.left,
+               target.bottom - target.top, SWP_NOZORDER);
+  RECT actual;
+  if (static_cast<UINT>(std::lround(GetScaleFactorForWindow(hwnd) * 96)) != dpi_before &&
+      GetWindowRect(hwnd, &actual) && !EqualRect(&actual, &target)) {
+    SetWindowPos(hwnd, nullptr, target.left, target.top, target.right - target.left,
+                 target.bottom - target.top, SWP_NOZORDER);
+  }
+}
+
+void Window::SetBounds(Rectangle bounds) {
+  if (pimpl_->hwnd_) {
+    MoveWindowTo(pimpl_->hwnd_, LogicalToPhysicalRect(bounds));
+  }
+}
+
+Rectangle Window::GetBounds() const {
+  RECT rect;
+  if (!pimpl_->hwnd_ || !GetWindowRect(pimpl_->hwnd_, &rect))
+    return {0, 0, 0, 0};
+  return PhysicalToLogicalRect(rect, GetScaleFactorForWindow(pimpl_->hwnd_));
+}
+
+void Window::SetSize(Size size, bool animate) {
+  if (pimpl_->hwnd_) {
+    // Windows doesn't have built-in animation for window resizing
+    // Animation would require custom implementation
+    double scale = GetScaleFactorForWindow(pimpl_->hwnd_);
+    if (scale <= 0.0)
+      scale = 1.0;
+    SetWindowPos(pimpl_->hwnd_, nullptr, 0, 0,
+                 static_cast<int>(std::lround(size.width * scale)),
+                 static_cast<int>(std::lround(size.height * scale)),
+                 SWP_NOMOVE | SWP_NOZORDER);
+  }
+}
+
+Size Window::GetSize() const {
+  Size size = {0, 0};
+  if (pimpl_->hwnd_) {
+    RECT rect;
+    GetWindowRect(pimpl_->hwnd_, &rect);
+    double scale = GetScaleFactorForWindow(pimpl_->hwnd_);
+    if (scale <= 0.0)
+      scale = 1.0;
+    size.width = static_cast<double>(rect.right - rect.left) / scale;
+    size.height = static_cast<double>(rect.bottom - rect.top) / scale;
+  }
+  return size;
+}
+
+void Window::SetContentSize(Size size) {
+  if (pimpl_->hwnd_) {
+    RECT windowRect, clientRect;
+    GetWindowRect(pimpl_->hwnd_, &windowRect);
+    GetClientRect(pimpl_->hwnd_, &clientRect);
+
+    // Calculate the difference between window and client area
+    int borderWidth = (windowRect.right - windowRect.left) - clientRect.right;
+    int borderHeight = (windowRect.bottom - windowRect.top) - clientRect.bottom;
+
+    double scale = GetScaleFactorForWindow(pimpl_->hwnd_);
+    if (scale <= 0.0)
+      scale = 1.0;
+    SetWindowPos(pimpl_->hwnd_, nullptr, 0, 0,
+                 static_cast<int>(std::lround(size.width * scale)) + borderWidth,
+                 static_cast<int>(std::lround(size.height * scale)) + borderHeight,
+                 SWP_NOMOVE | SWP_NOZORDER);
+  }
+}
+
+Size Window::GetContentSize() const {
+  Size size = {0, 0};
+  if (pimpl_->hwnd_) {
+    RECT rect;
+    GetClientRect(pimpl_->hwnd_, &rect);
+    double scale = GetScaleFactorForWindow(pimpl_->hwnd_);
+    if (scale <= 0.0)
+      scale = 1.0;
+    size.width = static_cast<double>(rect.right) / scale;
+    size.height = static_cast<double>(rect.bottom) / scale;
+  }
+  return size;
+}
+
+void Window::SetContentBounds(Rectangle bounds) {
+  if (!pimpl_->hwnd_)
+    return;
+  HWND hwnd = pimpl_->hwnd_;
+  const RECT content = LogicalToPhysicalRect(bounds);
+  // The frame around the content changes with the DPI, so after a move onto a
+  // monitor with another factor measure it again and correct.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    RECT window_rect, client_rect;
+    POINT client_origin = {0, 0};
+    if (!GetWindowRect(hwnd, &window_rect) || !GetClientRect(hwnd, &client_rect) ||
+        !ClientToScreen(hwnd, &client_origin))
+      return;
+    if (attempt > 0 && client_origin.x == content.left && client_origin.y == content.top &&
+        client_rect.right == content.right - content.left &&
+        client_rect.bottom == content.bottom - content.top)
+      return;
+    const LONG left_inset = client_origin.x - window_rect.left;
+    const LONG top_inset = client_origin.y - window_rect.top;
+    const LONG right_inset = window_rect.right - (client_origin.x + client_rect.right);
+    const LONG bottom_inset = window_rect.bottom - (client_origin.y + client_rect.bottom);
+    SetWindowPos(hwnd, nullptr, content.left - left_inset, content.top - top_inset,
+                 (content.right - content.left) + left_inset + right_inset,
+                 (content.bottom - content.top) + top_inset + bottom_inset, SWP_NOZORDER);
+  }
+}
+
+Rectangle Window::GetContentBounds() const {
+  RECT client_rect;
+  POINT origin = {0, 0};
+  if (!pimpl_->hwnd_ || !GetClientRect(pimpl_->hwnd_, &client_rect) ||
+      !ClientToScreen(pimpl_->hwnd_, &origin))
+    return {0, 0, 0, 0};
+  const RECT screen = {origin.x, origin.y, origin.x + client_rect.right,
+                       origin.y + client_rect.bottom};
+  return PhysicalToLogicalRect(screen, GetScaleFactorForWindow(pimpl_->hwnd_));
+}
+
+// Helper function: resolves the nativeapi Window that owns an HWND via the
+// WindowId property stored on it. Returns nullptr for foreign windows.
+static std::shared_ptr<Window> WindowFromHwnd(HWND hwnd) {
+  HANDLE prop_handle = GetPropW(hwnd, kWindowIdProperty);
+  if (!prop_handle) {
+    return nullptr;
+  }
+  WindowId window_id = static_cast<WindowId>(reinterpret_cast<uintptr_t>(prop_handle));
+  if (window_id == IdAllocator::kInvalidId) {
+    return nullptr;
+  }
+  return WindowRegistry::GetInstance().Get(window_id);
+}
+
+// Helper function: registers a WM_SIZING handler that keeps user-driven
+// resizing at the window's aspect ratio. Returns the handler ID.
+//
+// The ratio applies to the client area, as on macOS and Linux: the non-client
+// size (title bar, borders; zero when the client takes the whole frame) is taken
+// off the tracking rectangle first and added back afterwards. Like the min/max
+// handler, it reads the state of the wrapper that installed it, whose destructor
+// unregisters it; WindowRegistry may hold a different wrapper for the HWND.
+static int RegisterAspectRatioHandler(HWND hwnd,
+                                      int existing_handler_id,
+                                      const double* aspect_ratio,
+                                      const Size* minimum,
+                                      const Size* maximum) {
+  if (existing_handler_id != 0) {
+    return existing_handler_id;
+  }
+  if (!hwnd || !IsWindow(hwnd)) {
+    return 0;
+  }
+  return WindowMessageDispatcher::GetInstance().RegisterHandler(
+      hwnd,
+      [aspect_ratio, minimum, maximum](HWND hwnd, UINT msg, WPARAM wparam,
+                                       LPARAM lparam) -> std::optional<LRESULT> {
+        const double ratio = *aspect_ratio;
+        RECT* rect = reinterpret_cast<RECT*>(lparam);
+        if (msg != WM_SIZING || ratio <= 0.0 || !rect) {
+          return std::nullopt;
+        }
+        RECT window_rect = {};
+        RECT client_rect = {};
+        if (!GetWindowRect(hwnd, &window_rect) || !GetClientRect(hwnd, &client_rect)) {
+          return std::nullopt;
+        }
+        const LONG extra_width =
+            (window_rect.right - window_rect.left) - (client_rect.right - client_rect.left);
+        const LONG extra_height =
+            (window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top);
+
+        // Minimum and maximum sizes are frame sizes (WM_GETMINMAXINFO) and still
+        // win over the ratio; where one clips the derived side, derive the other
+        // side back from it so the ratio holds whenever the limits allow.
+        double scale = GetScaleFactorForWindow(hwnd);
+        if (scale <= 0.0) {
+          scale = 1.0;
+        }
+        auto limit = [scale](double value, double fallback) {
+          return value > 0 ? static_cast<LONG>(std::lround(value * scale))
+                           : static_cast<LONG>(fallback);
+        };
+        const LONG min_width = limit(minimum->width, 0);
+        const LONG min_height = limit(minimum->height, 0);
+        const LONG max_width = limit(maximum->width, LONG_MAX);
+        const LONG max_height = limit(maximum->height, LONG_MAX);
+        auto height_for = [&](LONG width) {
+          return static_cast<LONG>(std::lround((width - extra_width) / ratio)) + extra_height;
+        };
+        auto width_for = [&](LONG height) {
+          return static_cast<LONG>(std::lround((height - extra_height) * ratio)) + extra_width;
+        };
+
+        LONG width = rect->right - rect->left;
+        LONG height = rect->bottom - rect->top;
+        // Pure vertical edges derive width from height; everything else derives
+        // height from width.
+        if (wparam == WMSZ_TOP || wparam == WMSZ_BOTTOM) {
+          width = width_for(height);
+          const LONG clamped = std::clamp(width, min_width, max_width);
+          if (clamped != width) {
+            width = clamped;
+            height = height_for(width);
+          }
+        } else {
+          height = height_for(width);
+          const LONG clamped = std::clamp(height, min_height, max_height);
+          if (clamped != height) {
+            height = clamped;
+            width = width_for(height);
+          }
+        }
+        width = std::clamp(width, min_width, max_width);
+        height = std::clamp(height, min_height, max_height);
+
+        // Grow away from the edge being dragged so the opposite edge stays put.
+        switch (wparam) {
+          case WMSZ_LEFT:
+          case WMSZ_BOTTOMLEFT:
+            rect->left = rect->right - width;
+            rect->bottom = rect->top + height;
+            break;
+          case WMSZ_TOPLEFT:
+            rect->left = rect->right - width;
+            rect->top = rect->bottom - height;
+            break;
+          case WMSZ_TOP:
+          case WMSZ_TOPRIGHT:
+            rect->right = rect->left + width;
+            rect->top = rect->bottom - height;
+            break;
+          default:  // WMSZ_RIGHT, WMSZ_BOTTOM, WMSZ_BOTTOMRIGHT
+            rect->right = rect->left + width;
+            rect->bottom = rect->top + height;
+            break;
+        }
+        return std::make_optional<LRESULT>(TRUE);
+      });
+}
+
+// Helper function: registers a WM_WINDOWPOSCHANGING handler that pins the
+// window to the bottom of the Z order for as long as IsAlwaysOnBottom() holds.
+// Returns the handler ID.
+static int RegisterAlwaysOnBottomHandler(HWND hwnd, int existing_handler_id) {
+  if (existing_handler_id != 0) {
+    return existing_handler_id;
+  }
+  if (!hwnd || !IsWindow(hwnd)) {
+    return 0;
+  }
+  auto& dispatcher = WindowMessageDispatcher::GetInstance();
+  return dispatcher.RegisterHandler(
+      hwnd,
+      [](HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) -> std::optional<LRESULT> {
+        if (msg != WM_WINDOWPOSCHANGING) {
+          return std::nullopt;
+        }
+        auto window = WindowFromHwnd(hwnd);
+        WINDOWPOS* pos = reinterpret_cast<WINDOWPOS*>(lparam);
+        if (window && pos && window->IsAlwaysOnBottom()) {
+          pos->hwndInsertAfter = HWND_BOTTOM;
+          pos->flags &= ~SWP_NOZORDER;
+        }
+        // Let the original procedure see the (possibly adjusted) message.
+        return std::nullopt;
+      });
+}
+
+// Helper function: registers a WM_GETMINMAXINFO handler for the given HWND
+// via WindowMessageDispatcher if not already registered. Returns the handler ID.
+static int RegisterMinMaxInfoHandler(HWND hwnd,
+                                     int existing_handler_id,
+                                     const Size* minimum,
+                                     const Size* maximum) {
+  if (existing_handler_id != 0) {
+    return existing_handler_id;
+  }
+  if (!hwnd || !IsWindow(hwnd)) {
+    return 0;
+  }
+  // A directly constructed Window need not be in WindowRegistry; enumeration
+  // may also register a different wrapper for this HWND. Read the state of the
+  // wrapper that installed this handler. Its destructor unregisters the handler
+  // before destroying the Impl that owns these sizes.
+  return WindowMessageDispatcher::GetInstance().RegisterHandler(
+      hwnd,
+      [minimum, maximum](HWND hwnd, UINT msg, WPARAM, LPARAM lparam) -> std::optional<LRESULT> {
+        if (msg != WM_GETMINMAXINFO || !lparam) {
+          return std::nullopt;
+        }
+        auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+        double scale = GetScaleFactorForWindow(hwnd);
+        if (scale <= 0.0) {
+          scale = 1.0;
+        }
+        // Each axis can be bounded independently. Leave unconstrained fields
+        // as supplied by Windows, including the system's normal tracking limits.
+        if (minimum->width > 0) {
+          info->ptMinTrackSize.x = static_cast<LONG>(std::lround(minimum->width * scale));
+        }
+        if (minimum->height > 0) {
+          info->ptMinTrackSize.y = static_cast<LONG>(std::lround(minimum->height * scale));
+        }
+        if (maximum->width > 0) {
+          info->ptMaxTrackSize.x = static_cast<LONG>(std::lround(maximum->width * scale));
+        }
+        if (maximum->height > 0) {
+          info->ptMaxTrackSize.y = static_cast<LONG>(std::lround(maximum->height * scale));
+        }
+        return 0;
+      });
+}
+
+void Window::SetMinimumSize(Size size) {
+  pimpl_->min_size_ = size;
+
+  if (pimpl_->hwnd_) {
+    pimpl_->min_max_handler_id_ = RegisterMinMaxInfoHandler(
+        pimpl_->hwnd_, pimpl_->min_max_handler_id_, &pimpl_->min_size_, &pimpl_->max_size_);
+
+    // Trigger the window to re-evaluate its size constraints
+    SetWindowPos(pimpl_->hwnd_, nullptr, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+  }
+}
+
+Size Window::GetMinimumSize() const {
+  return pimpl_->min_size_;
+}
+
+void Window::SetMaximumSize(Size size) {
+  pimpl_->max_size_ = size;
+
+  if (pimpl_->hwnd_) {
+    pimpl_->min_max_handler_id_ = RegisterMinMaxInfoHandler(
+        pimpl_->hwnd_, pimpl_->min_max_handler_id_, &pimpl_->min_size_, &pimpl_->max_size_);
+
+    // Trigger the window to re-evaluate its size constraints
+    SetWindowPos(pimpl_->hwnd_, nullptr, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+  }
+}
+
+void Window::SetAspectRatio(double aspect_ratio) {
+  pimpl_->aspect_ratio_ = aspect_ratio > 0.0 ? aspect_ratio : 0.0;
+  if (pimpl_->hwnd_ && pimpl_->aspect_ratio_ > 0.0) {
+    pimpl_->aspect_ratio_handler_id_ = RegisterAspectRatioHandler(
+        pimpl_->hwnd_, pimpl_->aspect_ratio_handler_id_, &pimpl_->aspect_ratio_,
+        &pimpl_->min_size_, &pimpl_->max_size_);
+  }
+}
+
+double Window::GetAspectRatio() const {
+  return pimpl_->aspect_ratio_;
+}
+
+Size Window::GetMaximumSize() const {
+  return pimpl_->max_size_;
+}
+
+void Window::SetResizable(bool is_resizable) {
+  detail::WindowPropertyScope property_scope(*this);
+  if (pimpl_->hwnd_) {
+    LONG style = GetWindowLong(pimpl_->hwnd_, GWL_STYLE);
+    if (is_resizable) {
+      style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    } else {
+      style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    }
+    SetWindowLong(pimpl_->hwnd_, GWL_STYLE, style);
+    SetWindowPos(pimpl_->hwnd_, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+  }
+}
+
+bool Window::IsResizable() const {
+  if (!pimpl_->hwnd_)
+    return false;
+  LONG style = GetWindowLong(pimpl_->hwnd_, GWL_STYLE);
+  return (style & WS_THICKFRAME) != 0;
+}
+
+void Window::SetMovable(bool is_movable) {
+  detail::WindowPropertyScope property_scope(*this);
+  // Windows doesn't have a direct way to disable window movement
+  // This would require custom window procedure handling
+}
+
+bool Window::IsMovable() const {
+  // Windows windows are movable by default
+  return true;
+}
+
+void Window::SetMinimizable(bool is_minimizable) {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      window.SetMinimizable(is_minimizable);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  if (!pimpl_->hwnd_ || !::IsWindow(pimpl_->hwnd_)) return;
+  auto style = CaptionStyle(pimpl_->hwnd_);
+  if (is_minimizable) style |= WS_MINIMIZEBOX;
+  else style &= ~WS_MINIMIZEBOX;
+  SetCaptionStyle(pimpl_->hwnd_, style);
+}
+
+bool Window::IsMinimizable() const {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      return window.IsMinimizable();
+    });
+  }
+  return pimpl_->hwnd_ && ::IsWindow(pimpl_->hwnd_) &&
+         (CaptionStyle(pimpl_->hwnd_) & WS_MINIMIZEBOX) != 0;
+}
+
+void Window::SetMaximizable(bool is_maximizable) {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      window.SetMaximizable(is_maximizable);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  if (!pimpl_->hwnd_ || !::IsWindow(pimpl_->hwnd_)) return;
+  auto style = CaptionStyle(pimpl_->hwnd_);
+  if (is_maximizable) style |= WS_MAXIMIZEBOX;
+  else style &= ~WS_MAXIMIZEBOX;
+  SetCaptionStyle(pimpl_->hwnd_, style);
+}
+
+bool Window::IsMaximizable() const {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      return window.IsMaximizable();
+    });
+  }
+  return pimpl_->hwnd_ && ::IsWindow(pimpl_->hwnd_) &&
+         (CaptionStyle(pimpl_->hwnd_) & WS_MAXIMIZEBOX) != 0;
+}
+
+void Window::SetFullScreenable(bool is_full_screenable) {
+  detail::WindowPropertyScope property_scope(*this);
+  // This is a concept more relevant to macOS
+  // On Windows, any window can potentially go fullscreen
+}
+
+bool Window::IsFullScreenable() const {
+  return true;  // All Windows windows can go fullscreen
+}
+
+void Window::SetClosable(bool is_closable) {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      window.SetClosable(is_closable);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd)) return;
+  if (auto* policy = ControlPolicy(hwnd, true)) {
+    policy->closable = is_closable;
+    ApplyControlPolicy(hwnd, *policy);
+  }
+}
+
+bool Window::IsClosable() const {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      return window.IsClosable();
+    });
+  }
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd)) return false;
+  const auto* policy = ControlPolicy(hwnd, false);
+  if (policy && (!policy->visible || g_full_screen_windows.count(hwnd))) return policy->closable;
+  return NativeClosable(hwnd);
+}
+
+void Window::SetWindowControlButtonsVisible(bool is_visible) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      window.SetWindowControlButtonsVisible(is_visible);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  auto* policy = ControlPolicy(hwnd, true);
+  if (!policy) return;
+  if (policy->visible) policy->closable = NativeClosable(hwnd);
+  policy->visible = is_visible;
+  ApplyControlPolicy(hwnd, *policy);
+}
+
+bool Window::IsWindowControlButtonsVisible() const {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      return window.IsWindowControlButtonsVisible();
+    });
+  }
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd) || GetPropW(hwnd, kTitleBarHiddenProperty) ||
+      g_full_screen_windows.count(hwnd)) return false;
+  return (GetWindowLongPtrW(hwnd, GWL_STYLE) & (WS_CAPTION | WS_SYSMENU)) ==
+         (WS_CAPTION | WS_SYSMENU);
+}
+
+void Window::SetAlwaysOnTop(bool is_always_on_top) {
+  detail::WindowPropertyScope property_scope(*this);
+  if (is_always_on_top) {
+    pimpl_->always_on_bottom_ = false;
+  }
+  if (pimpl_->hwnd_) {
+    SetWindowPos(pimpl_->hwnd_, is_always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+}
+
+bool Window::IsAlwaysOnTop() const {
+  if (!pimpl_->hwnd_)
+    return false;
+  LONG exStyle = GetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE);
+  return (exStyle & WS_EX_TOPMOST) != 0;
+}
+
+void Window::SetAlwaysOnBottom(bool is_always_on_bottom) {
+  detail::WindowPropertyScope property_scope(*this);
+  pimpl_->always_on_bottom_ = is_always_on_bottom;
+  if (!pimpl_->hwnd_) {
+    return;
+  }
+  if (is_always_on_bottom) {
+    pimpl_->always_on_bottom_handler_id_ =
+        RegisterAlwaysOnBottomHandler(pimpl_->hwnd_, pimpl_->always_on_bottom_handler_id_);
+  }
+  // HWND_NOTOPMOST also clears WS_EX_TOPMOST, so this doubles as the "vice versa"
+  // half of the always-on-top exclusivity.
+  SetWindowPos(pimpl_->hwnd_, is_always_on_bottom ? HWND_BOTTOM : HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+bool Window::IsAlwaysOnBottom() const {
+  return pimpl_->always_on_bottom_;
+}
+
+bool Window::SetParentWindow(std::shared_ptr<Window> parent) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsWindow(hwnd)) {
+    return false;
+  }
+  HWND parent_hwnd = nullptr;
+  if (parent) {
+    parent_hwnd = static_cast<HWND>(parent->GetNativeObject());
+    if (!parent_hwnd || !IsWindow(parent_hwnd)) {
+      return false;
+    }
+    // Neither itself nor one of its own descendants
+    for (HWND ancestor = parent_hwnd; ancestor; ancestor = GetWindow(ancestor, GW_OWNER)) {
+      if (ancestor == hwnd) {
+        return false;
+      }
+    }
+  }
+  // For a top-level window GWLP_HWNDPARENT is the owner, not a parent in the
+  // WS_CHILD sense. The previous value may legitimately be 0, so the error has
+  // to be read from the thread.
+  SetLastError(0);
+  if (SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(parent_hwnd)) == 0 &&
+      GetLastError() != 0) {
+    return false;
+  }
+  if (parent_hwnd && IsWindowVisible(hwnd)) {
+    // The owner only takes effect in the Z order the next time it is computed
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+  return true;
+}
+
+std::shared_ptr<Window> Window::GetParentWindow() const {
+  HWND hwnd = pimpl_->hwnd_;
+  HWND owner = (hwnd && IsWindow(hwnd)) ? GetWindow(hwnd, GW_OWNER) : nullptr;
+  if (!owner) {
+    return nullptr;
+  }
+  // The wrapper takes the ID the native window already carries, which is how
+  // the registered Window for it, if there is one, is found.
+  auto wrapper = std::make_shared<Window>(static_cast<void*>(owner));
+  auto registered = WindowManager::GetInstance().Get(wrapper->GetId());
+  return registered ? registered : wrapper;
+}
+
+static void ApplyFocusPolicy(HWND hwnd) {
+  if (!hwnd || !IsWindow(hwnd)) return;
+  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  const bool no_activate = GetPropW(hwnd, kNonFocusableProperty) ||
+                           GetPropW(hwnd, kNonActivatingProperty);
+  style = no_activate ? style | WS_EX_NOACTIVATE : style & ~WS_EX_NOACTIVATE;
+  SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
+  if (no_activate) {
+    EnumChildWindows(hwnd, InstallFocusPolicyChild, 0);
+    HWND focused = GetFocus();
+    if (focused && GetAncestor(focused, GA_ROOT) == hwnd)
+      RejectBlockedFocus(focused, nullptr);
+  } else {
+    RemovePropW(hwnd, kFocusReturnWindowProperty);
+  }
+}
+
+void Window::SetNonActivating(bool is_non_activating) {
+  if (!pimpl_->hwnd_) return;
+  if (is_non_activating)
+    SetPropW(pimpl_->hwnd_, kNonActivatingProperty, reinterpret_cast<HANDLE>(1));
+  else
+    RemovePropW(pimpl_->hwnd_, kNonActivatingProperty);
+  ApplyFocusPolicy(pimpl_->hwnd_);
+}
+
+bool Window::IsNonActivating() const {
+  return pimpl_->hwnd_ && GetPropW(pimpl_->hwnd_, kNonActivatingProperty);
+}
+
+void Window::SetPosition(Point point) {
+  if (pimpl_->hwnd_) {
+    // The logical size stays; on a monitor with another factor that is another
+    // physical size.
+    const Size size = GetSize();
+    MoveWindowTo(pimpl_->hwnd_, LogicalToPhysicalRect({point.x, point.y, size.width, size.height}));
+  }
+}
+
+Point Window::GetPosition() const {
+  RECT rect;
+  if (!pimpl_->hwnd_ || !GetWindowRect(pimpl_->hwnd_, &rect))
+    return {0, 0};
+  return PhysicalToLogicalPoint({rect.left, rect.top});
+}
+
+void Window::Center() {
+  if (!pimpl_->hwnd_)
+    return;
+
+  // A full screen window already fills the monitor. Centering it in the work area
+  // would push it off the screen by half the taskbar's height.
+  if (IsFullScreen())
+    return;
+
+  // Get the current window size
+  RECT windowRect;
+  GetWindowRect(pimpl_->hwnd_, &windowRect);
+  int windowWidth = windowRect.right - windowRect.left;
+  int windowHeight = windowRect.bottom - windowRect.top;
+
+  // Get the monitor that the window is currently on
+  HMONITOR monitor = MonitorFromWindow(pimpl_->hwnd_, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi = {sizeof(mi)};
+  GetMonitorInfo(monitor, &mi);
+
+  // Calculate the center position on the monitor's work area
+  // All values here are in physical pixels (GetWindowRect and rcWork), so no DPI scaling needed
+  int centerX = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - windowWidth) / 2;
+  int centerY = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - windowHeight) / 2;
+
+  // Set the window position to center
+  SetWindowPos(pimpl_->hwnd_, nullptr, centerX, centerY, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void Window::SetTitle(std::string title) {
+  detail::WindowPropertyScope property_scope(*this);
+  if (pimpl_->hwnd_) {
+    std::wstring wtitle = StringToWString(title);
+    SetWindowTextW(pimpl_->hwnd_, wtitle.c_str());
+  }
+}
+
+std::string Window::GetTitle() const {
+  if (!pimpl_->hwnd_)
+    return "";
+
+  int length = GetWindowTextLengthW(pimpl_->hwnd_);
+  if (length == 0)
+    return "";
+
+  std::wstring wtitle(length + 1, L'\0');
+  GetWindowTextW(pimpl_->hwnd_, &wtitle[0], length + 1);
+  wtitle.resize(length);
+  return WStringToString(wtitle);
+}
+
+bool Window::SetFrameless(bool is_frameless) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd)) return false;
+  if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      return window.SetFrameless(is_frameless);
+    });
+  }
+  if (is_frameless == IsFrameless()) return true;
+  detail::WindowPropertyScope property_scope(*this);
+  SetTitleBarStyle(is_frameless ? TitleBarStyle::Hidden : TitleBarStyle::Normal);
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  if (is_frameless && !SetWinUI3Frameless(hwnd)) return false;
+#endif
+  if (is_frameless) SetPropW(hwnd, kExplicitFramelessProperty, reinterpret_cast<HANDLE>(1));
+  UpdateFrameRendering(hwnd, false);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  return IsFrameless() == is_frameless;
+}
+
+bool Window::IsFrameless() const {
+  HWND hwnd = pimpl_->hwnd_;
+  return hwnd && ::IsWindow(hwnd) && GetPropW(hwnd, kExplicitFramelessProperty);
+}
+
+void Window::SetTitleBarStyle(TitleBarStyle style) {
+  HWND owner_window = pimpl_->hwnd_;
+  if (owner_window && GetWindowThreadProcessId(owner_window, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(owner_window, GetId(), false, [=] {
+      Window window(owner_window);
+      window.SetTitleBarStyle(style);
+      return true;
+    });
+    return;
+  }
+  detail::WindowPropertyScope property_scope(*this);
+  if (!pimpl_->hwnd_ || !::IsWindow(pimpl_->hwnd_))
+    return;
+
+  RemovePropW(pimpl_->hwnd_, kExplicitFramelessProperty);
+
+  if (auto* controls = ControlPolicy(pimpl_->hwnd_, true)) {
+    if (controls->visible) controls->closable = NativeClosable(pimpl_->hwnd_);
+  }
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  if (!SetWinUI3TitleBarStyle(pimpl_->hwnd_, style)) return;
+#else
+  // Keep the native caption style even when its non-client area is hidden by
+  // HandleHiddenTitleBarFrame. Removing it makes Windows maximize the outer
+  // window over the entire monitor, which also hides the taskbar. Clamping only
+  // the client area in WM_NCCALCSIZE cannot fix the shell's fullscreen detection.
+  const auto full_screen = g_full_screen_windows.find(pimpl_->hwnd_);
+  if (full_screen != g_full_screen_windows.end()) {
+    // A full screen window shows no caption; leaving full screen puts it back,
+    // also on a window that had none when it went full screen.
+    full_screen->second.style |= WS_CAPTION;
+  } else {
+    SetWindowLongPtrW(pimpl_->hwnd_, GWL_STYLE,
+                      GetWindowLongPtrW(pimpl_->hwnd_, GWL_STYLE) | WS_CAPTION);
+  }
+#endif
+  // Read by WM_NCCALCSIZE during the frame change below.
+  if (style == TitleBarStyle::Hidden) {
+    SetPropW(pimpl_->hwnd_, kTitleBarHiddenProperty, reinterpret_cast<HANDLE>(1));
+#ifndef NATIVEAPI_ENABLE_WINUI3
+    // Existing children; later ones are attached as they are created (WM_PARENTNOTIFY).
+    EnumChildWindows(pimpl_->hwnd_, AttachTopEdgeChild, 0);
+#endif
+  } else {
+    RemovePropW(pimpl_->hwnd_, kTitleBarHiddenProperty);
+  }
+
+  if (auto* controls = ControlPolicy(pimpl_->hwnd_, true)) {
+    controls->visible = style == TitleBarStyle::Normal;
+    ApplyControlPolicy(pimpl_->hwnd_, *controls);
+  }
+
+  // Get current window rect
+  RECT rect;
+  GetWindowRect(pimpl_->hwnd_, &rect);
+
+  // Apply DWM frame extension based on style
+  UpdateFrameExtent(pimpl_->hwnd_);
+  // Before the frame change below: WM_NCCALCSIZE reads whether the frame is left.
+  UpdateFrameRendering(pimpl_->hwnd_, false);
+
+  // Trigger frame change to apply the new style
+  SetWindowPos(pimpl_->hwnd_, nullptr, rect.left, rect.top, 0, 0,
+               SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+}
+
+TitleBarStyle Window::GetTitleBarStyle() const {
+  if (pimpl_->hwnd_ && GetPropW(pimpl_->hwnd_, kTitleBarHiddenProperty))
+    return TitleBarStyle::Hidden;
+  return TitleBarStyle::Normal;
+}
+
+bool Window::SetContentProtection(bool is_content_protected) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!IsWindow(hwnd)) return false;
+  // Keep compatibility with SDKs predating WDA_EXCLUDEFROMCAPTURE. Before
+  // Windows 10 2004, WDA_MONITOR blanks protected content in captures.
+  const DWORD affinity = !is_content_protected ? WDA_NONE
+      : WindowsBuildNumber() >= 19041 ? 0x00000011 : WDA_MONITOR;
+  return SetWindowDisplayAffinity(hwnd, affinity) != FALSE;
+}
+
+bool Window::IsContentProtected() const {
+  DWORD affinity = WDA_NONE;
+  return IsWindow(pimpl_->hwnd_) && GetWindowDisplayAffinity(pimpl_->hwnd_, &affinity) &&
+         (affinity == WDA_MONITOR || affinity == 0x00000011);
+}
+
+bool Window::IsContentProtectionSupported() {
+  BOOL enabled = FALSE;
+  return SUCCEEDED(DwmIsCompositionEnabled(&enabled)) && enabled;
+}
+
+bool Window::SetCornerPreference(WindowCornerPreference preference) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!IsCornerPreferenceSupported() || !IsWindow(hwnd)) return false;
+  int native_preference;
+  switch (preference) {
+    case WindowCornerPreference::Default: native_preference = 0; break;
+    case WindowCornerPreference::DoNotRound: native_preference = 1; break;
+    case WindowCornerPreference::Round: native_preference = 2; break;
+    case WindowCornerPreference::RoundSmall: native_preference = 3; break;
+    default: return false;
+  }
+  // Reserve the record first: if SetProp fails, leave DWM untouched. If DWM
+  // rejects the attribute, roll the record back to its previous value.
+  HANDLE previous = GetPropW(hwnd, kCornerPreferenceProperty);
+  HANDLE record = reinterpret_cast<HANDLE>(static_cast<INT_PTR>(native_preference + 1));
+  if (!SetPropW(hwnd, kCornerPreferenceProperty, record)) return false;
+  if (FAILED(DwmSetWindowAttribute(hwnd, kDwmwaWindowCornerPreference,
+                                  &native_preference, sizeof(native_preference)))) {
+    if (previous) SetPropW(hwnd, kCornerPreferenceProperty, previous);
+    else RemovePropW(hwnd, kCornerPreferenceProperty);
+    return false;
+  }
+  if (preference == WindowCornerPreference::Default)
+    RemovePropW(hwnd, kCornerPreferenceProperty);
+  return true;
+}
+
+WindowCornerPreference Window::GetCornerPreference() const {
+  if (!IsWindow(pimpl_->hwnd_)) return WindowCornerPreference::Default;
+  const auto record = reinterpret_cast<INT_PTR>(GetPropW(pimpl_->hwnd_, kCornerPreferenceProperty));
+  switch (record) {
+    case 2: return WindowCornerPreference::DoNotRound;
+    case 3: return WindowCornerPreference::Round;
+    case 4: return WindowCornerPreference::RoundSmall;
+    default: return WindowCornerPreference::Default;
+  }
+}
+
+bool Window::IsCornerPreferenceSupported() {
+  return WindowsBuildNumber() >= kBuildCornerPreference;
+}
+
+// The client area can be given the caption band (WM_NCCALCSIZE), but the caption buttons
+// DWM keeps drawing there answer HTCLIENT once it is client area, so they stop working:
+// they would have to be hit-tested and drawn by hand. TitleBarStyle::Hidden plus chrome
+// of the application's own is the way to a full-bleed window here.
+bool Window::SetContentUnderTitleBar(bool is_content_under_title_bar) {
+  return false;
+}
+
+bool Window::IsContentUnderTitleBar() const {
+  return false;
+}
+
+bool Window::IsContentUnderTitleBarSupported() {
+  return false;
+}
+
+void Window::SetHasShadow(bool has_shadow) {
+  if (!pimpl_->hwnd_)
+    return;
+
+  // The shadow is part of the frame the desktop compositor draws around the window, so
+  // it goes away with the rest of that frame. UpdateFrameRendering decides who draws it.
+  if (has_shadow)
+    RemovePropW(pimpl_->hwnd_, kNoShadowProperty);
+  else
+    SetPropW(pimpl_->hwnd_, kNoShadowProperty, reinterpret_cast<HANDLE>(1));
+  UpdateFrameRendering(pimpl_->hwnd_, true);
+}
+
+bool Window::SetCustomShadow(std::shared_ptr<WindowShadow> shadow) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!IsWindow(hwnd) || (shadow && GetTitleBarStyle() != TitleBarStyle::Hidden)) return false;
+  auto* copy = shadow ? new WindowShadow(*shadow) : nullptr;
+  auto* previous = static_cast<WindowShadow*>(GetPropW(hwnd, shape_shadow::kConfig));
+  if (copy && !SetPropW(hwnd, shape_shadow::kConfig, copy)) { delete copy; return false; }
+  if (!copy) RemovePropW(hwnd, shape_shadow::kConfig);
+  delete previous;
+  SetHasShadow(HasShadow());
+  return true;
+}
+std::shared_ptr<WindowShadow> Window::GetCustomShadow() const {
+  const auto* options = static_cast<WindowShadow*>(GetPropW(pimpl_->hwnd_, shape_shadow::kConfig));
+  return options ? std::make_shared<WindowShadow>(*options) : nullptr;
+}
+
+bool Window::HasShadow() const {
+  return pimpl_->hwnd_ && !GetPropW(pimpl_->hwnd_, kNoShadowProperty);
+}
+
+void Window::SetOpacity(float opacity) {
+  if (pimpl_->hwnd_) {
+    LONG exStyle = GetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE);
+
+    if (opacity < 1.0f) {
+      // Enable layered window and set opacity
+      SetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+      SetLayeredWindowAttributes(pimpl_->hwnd_, 0, static_cast<BYTE>(opacity * 255), LWA_ALPHA);
+    } else {
+      // Disable layered window
+      SetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+    }
+  }
+}
+
+float Window::GetOpacity() const {
+  if (!pimpl_->hwnd_)
+    return 1.0f;
+
+  LONG exStyle = GetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE);
+  if (exStyle & WS_EX_LAYERED) {
+    BYTE alpha;
+    if (GetLayeredWindowAttributes(pimpl_->hwnd_, nullptr, &alpha, nullptr)) {
+      return alpha / 255.0f;
+    }
+  }
+  return 1.0f;
+}
+
+bool Window::SetVisualEffect(VisualEffect effect) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsWindow(hwnd))
+    return false;
+
+  const VisualEffectRecipe recipe = RecipeFor(effect);
+  if (effect != VisualEffect::None && !recipe.IsAvailable())
+    return false;
+
+  // The backdrop first: it is the step that can fail, and nothing has changed yet if
+  // it does. Versions without system backdrops reject the attribute, which only
+  // matters when one was asked for.
+  int backdrop = recipe.backdrop;
+  const HRESULT result =
+      DwmSetWindowAttribute(hwnd, kDwmwaSystemBackdropType, &backdrop, sizeof(backdrop));
+  if (FAILED(result) && recipe.backdrop != kBackdropNone)
+    return false;
+
+  if (effect == VisualEffect::None) {
+    RemovePropW(hwnd, kVisualEffectProperty);
+    ApplyBackgroundAccent(hwnd);
+  } else {
+    SetPropW(hwnd, kVisualEffectProperty,
+             reinterpret_cast<HANDLE>(static_cast<uintptr_t>(effect)));
+    // An acrylic accent with no color at all is not drawn on Windows 10; the faintest is.
+    SetAccentPolicy(hwnd, recipe.accent,
+                    recipe.accent == kAccentEnableAcrylicBlurBehind ? 0x01000000 : 0, 0);
+  }
+  UpdateFrameExtent(hwnd);
+  InvalidateRect(hwnd, nullptr, TRUE);
+  return true;
+}
+
+VisualEffect Window::GetVisualEffect() const {
+  if (!pimpl_->hwnd_)
+    return VisualEffect::None;
+  return static_cast<VisualEffect>(
+      reinterpret_cast<uintptr_t>(GetPropW(pimpl_->hwnd_, kVisualEffectProperty)));
+}
+
+bool Window::IsVisualEffectSupported(VisualEffect effect) {
+  return effect == VisualEffect::None || RecipeFor(effect).IsAvailable();
+}
+
+void Window::SetBackgroundColor(const Color& color) {
+  if (!pimpl_->hwnd_)
+    return;
+
+  if (color.a < 255) {
+    // A brush cannot be translucent. The compositor draws the color instead, behind
+    // whatever the window and its children leave transparent - a Flutter view clears
+    // to transparent, so this is all it takes to see the desktop through it.
+    const uintptr_t stored = (uintptr_t{1} << 32) | (static_cast<uintptr_t>(color.a) << 24) |
+                             (static_cast<uintptr_t>(color.r) << 16) |
+                             (static_cast<uintptr_t>(color.g) << 8) | color.b;
+    SetPropW(pimpl_->hwnd_, kTranslucentBackgroundProperty, reinterpret_cast<HANDLE>(stored));
+    RemovePropW(pimpl_->hwnd_, kBackgroundColorProperty);
+    UpdateFrameExtent(pimpl_->hwnd_);
+    // While a visual effect is active the accent is its; the color waits in the property.
+    if (!GetPropW(pimpl_->hwnd_, kVisualEffectProperty))
+      ApplyBackgroundAccent(pimpl_->hwnd_);
+    InvalidateRect(pimpl_->hwnd_, nullptr, TRUE);
+    return;
+  }
+  if (GetPropW(pimpl_->hwnd_, kTranslucentBackgroundProperty)) {
+    RemovePropW(pimpl_->hwnd_, kTranslucentBackgroundProperty);
+    if (!GetPropW(pimpl_->hwnd_, kVisualEffectProperty))
+      ApplyBackgroundAccent(pimpl_->hwnd_);
+    UpdateFrameExtent(pimpl_->hwnd_);
+  }
+
+  // A window of the library's own class is painted by WindowProc, one color per window.
+  if (reinterpret_cast<WNDPROC>(GetClassLongPtrW(pimpl_->hwnd_, GCLP_WNDPROC)) == WindowProc) {
+    const uintptr_t stored = (uintptr_t{1} << 24) | (static_cast<uintptr_t>(color.r) << 16) |
+                             (static_cast<uintptr_t>(color.g) << 8) | color.b;
+    SetPropW(pimpl_->hwnd_, kBackgroundColorProperty, reinterpret_cast<HANDLE>(stored));
+    InvalidateRect(pimpl_->hwnd_, nullptr, TRUE);
+    return;
+  }
+
+  // Anyone else's window only has its class brush to go by.
+  COLORREF colorRef = RGB(color.r, color.g, color.b);
+  HBRUSH brush = CreateSolidBrush(colorRef);
+  
+  // Get old brush to delete it later
+  HBRUSH oldBrush = reinterpret_cast<HBRUSH>(
+    SetClassLongPtr(pimpl_->hwnd_, GCLP_HBRBACKGROUND, 
+                    reinterpret_cast<LONG_PTR>(brush)));
+  
+  // Delete old brush if it's not a system brush
+  if (oldBrush && oldBrush != GetStockObject(NULL_BRUSH) &&
+      oldBrush != GetStockObject(WHITE_BRUSH) &&
+      oldBrush != GetStockObject(BLACK_BRUSH) &&
+      oldBrush != GetStockObject(GRAY_BRUSH) &&
+      oldBrush != GetStockObject(LTGRAY_BRUSH) &&
+      oldBrush != GetStockObject(DKGRAY_BRUSH)) {
+    DeleteObject(oldBrush);
+  }
+  
+  // Force window to redraw with new background color
+  InvalidateRect(pimpl_->hwnd_, nullptr, TRUE);
+}
+
+Color Window::GetBackgroundColor() const {
+  if (!pimpl_->hwnd_)
+    return Color::White;
+
+  if (HANDLE translucent = GetPropW(pimpl_->hwnd_, kTranslucentBackgroundProperty)) {
+    const uintptr_t stored = reinterpret_cast<uintptr_t>(translucent);
+    return Color::FromRGBA(static_cast<unsigned char>((stored >> 16) & 0xFF),
+                           static_cast<unsigned char>((stored >> 8) & 0xFF),
+                           static_cast<unsigned char>(stored & 0xFF),
+                           static_cast<unsigned char>((stored >> 24) & 0xFF));
+  }
+
+  if (const auto stored =
+          reinterpret_cast<uintptr_t>(GetPropW(pimpl_->hwnd_, kBackgroundColorProperty))) {
+    return Color::FromRGBA(static_cast<unsigned char>((stored >> 16) & 0xFF),
+                           static_cast<unsigned char>((stored >> 8) & 0xFF),
+                           static_cast<unsigned char>(stored & 0xFF), 255);
+  }
+
+  // Get the background brush from the window class
+  HBRUSH brush = reinterpret_cast<HBRUSH>(
+    GetClassLongPtr(pimpl_->hwnd_, GCLP_HBRBACKGROUND));
+  
+  if (!brush || brush == GetStockObject(NULL_BRUSH)) {
+    return Color::White;
+  }
+  
+  // Get the brush color using GetObject
+  LOGBRUSH logBrush;
+  if (GetObject(brush, sizeof(LOGBRUSH), &logBrush) == 0) {
+    return Color::White;
+  }
+  
+  // Extract RGB values from COLORREF
+  COLORREF colorRef = logBrush.lbColor;
+  return Color::FromRGBA(
+    GetRValue(colorRef),
+    GetGValue(colorRef),
+    GetBValue(colorRef),
+    255  // Windows doesn't store alpha in solid brush
+  );
+}
+
+void Window::SetVisibleOnAllWorkspaces(bool is_visible_on_all_workspaces) {
+  // Windows doesn't have the same concept of workspaces as macOS
+  // This would require integration with virtual desktop APIs
+}
+
+bool Window::IsVisibleOnAllWorkspaces() const {
+  return false;  // Not supported on Windows by default
+}
+
+void Window::SetVisibleInTaskbar(bool is_visible_in_taskbar) {
+  if (!pimpl_->hwnd_)
+    return;
+
+  if (is_visible_in_taskbar)
+    RemovePropW(pimpl_->hwnd_, kHiddenFromTaskbarProperty);
+  else
+    SetPropW(pimpl_->hwnd_, kHiddenFromTaskbarProperty, reinterpret_cast<HANDLE>(1));
+  ApplyTaskbarVisibility(pimpl_->hwnd_, is_visible_in_taskbar);
+}
+
+bool Window::IsVisibleInTaskbar() const {
+  return pimpl_->hwnd_ && !GetPropW(pimpl_->hwnd_, kHiddenFromTaskbarProperty);
+}
+
+bool Window::SetIgnoreMouseEvents(bool is_ignore_mouse_events, bool forward) {
+  HWND window = pimpl_->hwnd_;
+  if (!IsWindow(window) || GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId())
+    return false;
+  auto* policy = static_cast<MouseInputPolicy*>(GetPropW(window, kMouseInputPolicyProperty));
+  if (!policy) {
+    policy = new MouseInputPolicy;
+    const UINT_PTR id = reinterpret_cast<UINT_PTR>(policy);
+    if (!SetWindowSubclass(window, MouseInputPolicySubclass, id, reinterpret_cast<DWORD_PTR>(policy))) {
+      delete policy;
+      return false;
+    }
+    if (!SetPropW(window, kMouseInputPolicyProperty, policy)) {
+      RemoveWindowSubclass(window, MouseInputPolicySubclass, id);
+      delete policy;
+      return false;
+    }
+  }
+  const LONG_PTR previous = GetWindowLongPtrW(window, GWL_EXSTYLE);
+  LONG_PTR style = previous;
+  const bool add_layered = is_ignore_mouse_events && !(previous & WS_EX_LAYERED);
+  if (is_ignore_mouse_events) style |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+  else {
+    style &= ~WS_EX_TRANSPARENT;
+    if (policy->added_layered) style &= ~WS_EX_LAYERED;
+  }
+  UINT_PTR timer = policy->timer;
+  if (is_ignore_mouse_events && forward && !timer) {
+    timer = SetTimer(window, reinterpret_cast<UINT_PTR>(policy), 16, ForwardMouseMovement);
+    if (!timer) return false;
+  }
+  SetLastError(0);
+  const LONG_PTR result = SetWindowLongPtrW(window, GWL_EXSTYLE, style);
+  if ((!result && GetLastError()) ||
+      (add_layered && !SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA))) {
+    SetWindowLongPtrW(window, GWL_EXSTYLE, previous);
+    if (timer && timer != policy->timer) KillTimer(window, timer);
+    return false;
+  }
+  policy->added_layered = is_ignore_mouse_events && (add_layered || policy->added_layered);
+  policy->forward = is_ignore_mouse_events && forward;
+  if (!policy->forward && timer) {
+    KillTimer(window, timer);
+    timer = 0;
+    policy->target = nullptr;
+  }
+  policy->timer = timer;
+  return true;
+}
+
+bool Window::IsIgnoreMouseEvents() const {
+  if (!IsWindow(pimpl_->hwnd_))
+    return false;
+  LONG exStyle = GetWindowLong(pimpl_->hwnd_, GWL_EXSTYLE);
+  return (exStyle & WS_EX_TRANSPARENT) != 0;
+}
+
+bool Window::IsMouseMoveForwardingEnabled() const {
+  const auto* policy = static_cast<MouseInputPolicy*>(GetPropW(pimpl_->hwnd_, kMouseInputPolicyProperty));
+  return IsIgnoreMouseEvents() && policy && policy->forward;
+}
+
+bool Window::IsMouseMoveForwardingSupported() { return true; }
+
+void Window::SetFocusable(bool is_focusable) {
+  if (!pimpl_->hwnd_) return;
+  if (is_focusable)
+    RemovePropW(pimpl_->hwnd_, kNonFocusableProperty);
+  else
+    SetPropW(pimpl_->hwnd_, kNonFocusableProperty, reinterpret_cast<HANDLE>(1));
+  ApplyFocusPolicy(pimpl_->hwnd_);
+}
+
+bool Window::IsFocusable() const {
+  if (!pimpl_->hwnd_)
+    return false;
+  LONG style = GetWindowLong(pimpl_->hwnd_, GWL_STYLE);
+  return (style & WS_DISABLED) == 0 &&
+         (GetWindowLongPtrW(pimpl_->hwnd_, GWL_EXSTYLE) & WS_EX_NOACTIVATE) == 0;
+}
+
+// Hands the mouse gesture in progress to the system frame, as if the press had landed on the
+// given non-client area (HTCAPTION moves, HTLEFT... resize).
+static void StartSystemFrameDrag(HWND hwnd, WPARAM hit_test) {
+  // Gesture recognizers can report a drag start after the button is already up (a plain
+  // click); the modal loop entered then would glue the window to the cursor until the next
+  // click.
+  const int primary = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+  if ((GetAsyncKeyState(primary) & 0x8000) == 0) {
+    return;
+  }
+  // The caller is inside a mouse-down handler, which typically holds capture (Flutter's view
+  // does); release it, or the system frame never gets the drag.
+  ReleaseCapture();
+  POINT cursor;
+  GetCursorPos(&cursor);
+  PostMessage(hwnd, WM_NCLBUTTONDOWN, hit_test, MAKELPARAM(cursor.x, cursor.y));
+}
+
+namespace {
+struct SystemMenuSession {
+  HMENU menu;
+  bool initialized = false;
+};
+
+LRESULT CALLBACK ObserveSystemMenu(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
+                                  UINT_PTR, DWORD_PTR data) {
+  auto* session = reinterpret_cast<SystemMenuSession*>(data);
+  if (message == WM_INITMENUPOPUP && reinterpret_cast<HMENU>(wp) == session->menu)
+    session->initialized = true;
+  return DefSubclassProc(hwnd, message, wp, lp);
+}
+}  // namespace
+
+bool Window::ShowSystemMenu(Point position) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!IsWindow(hwnd) || !IsWindowVisible(hwnd) ||
+      (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) ||
+      !std::isfinite(position.x) || !std::isfinite(position.y)) return false;
+  HMENU menu = GetSystemMenu(hwnd, FALSE);
+  if (!menu || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_SYSMENU)) return false;
+  POINT origin = {};
+  if (!ClientToScreen(hwnd, &origin)) return false;
+  const double scale = GetScaleFactorForWindow(hwnd);
+  const double x = origin.x + position.x * scale, y = origin.y + position.y * scale;
+  if (x < LONG_MIN || x > LONG_MAX || y < LONG_MIN || y > LONG_MAX) return false;
+  const bool minimized = IsIconic(hwnd), maximized = IsZoomed(hwnd), full_screen = IsFullScreen();
+  auto enable = [menu](UINT command, bool enabled) {
+    EnableMenuItem(menu, command, MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
+  };
+  enable(SC_RESTORE, minimized || maximized || full_screen);
+  enable(SC_MOVE, !maximized && !full_screen && IsMovable());
+  enable(SC_SIZE, !minimized && !maximized && !full_screen && IsResizable());
+  enable(SC_MINIMIZE, !minimized && !full_screen && IsMinimizable());
+  enable(SC_MAXIMIZE, !maximized && !full_screen && IsMaximizable());
+  // Keep the host's SC_CLOSE state and any custom items. GetSystemMenu(hwnd,
+  // TRUE) would discard them, so never reset or destroy the native menu.
+  SystemMenuSession session{menu};
+  const UINT_PTR observer_id = reinterpret_cast<UINT_PTR>(&session);
+  if (!SetWindowSubclass(hwnd, ObserveSystemMenu, observer_id,
+                          reinterpret_cast<DWORD_PTR>(&session))) return false;
+  const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                       static_cast<int>(std::lround(x)),
+                                       static_cast<int>(std::lround(y)), hwnd, nullptr);
+  if (IsWindow(hwnd)) RemoveWindowSubclass(hwnd, ObserveSystemMenu, observer_id);
+  if (command && IsWindow(hwnd)) {
+    if (command == SC_RESTORE && full_screen) SetFullScreen(false);
+    else PostMessageW(hwnd, WM_SYSCOMMAND, command, 0);
+  }
+  // With TPM_RETURNCMD, zero means both cancellation and failure. LastError
+  // is not reliable across the host callbacks in the nested menu loop.
+  return command != 0 || session.initialized;
+}
+
+bool Window::IsSystemMenuSupported() {
+  return true;
+}
+
+bool Window::SetMaximizeButtonBounds(Rectangle bounds) {
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  (void)bounds;
+  return false;
+#else
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsWindow(hwnd) || !std::isfinite(bounds.x) || !std::isfinite(bounds.y) ||
+      !std::isfinite(bounds.width) || !std::isfinite(bounds.height))
+    return false;
+  auto* area = static_cast<MaximizeButtonArea*>(GetPropW(hwnd, kMaximizeButtonProperty));
+  if (bounds.width <= 0 || bounds.height <= 0) {
+    delete static_cast<MaximizeButtonArea*>(RemovePropW(hwnd, kMaximizeButtonProperty));
+    return true;
+  }
+  if (!area) {
+    area = new MaximizeButtonArea();
+    if (!SetPropW(hwnd, kMaximizeButtonProperty, area)) {
+      delete area;
+      return false;
+    }
+    // Content windows (a Flutter view) are hit-tested first: let them step
+    // aside over the button so this window can answer HTMAXBUTTON.
+    EnumChildWindows(hwnd, AttachTopEdgeChild, 0);
+  }
+  area->bounds = bounds;
+  return true;
+#endif
+}
+
+Rectangle Window::GetMaximizeButtonBounds() const {
+  HWND hwnd = pimpl_->hwnd_;
+  const auto* area =
+      hwnd ? static_cast<MaximizeButtonArea*>(GetPropW(hwnd, kMaximizeButtonProperty)) : nullptr;
+  return area ? area->bounds : Rectangle{0, 0, 0, 0};
+}
+
+bool Window::IsMaximizeButtonBoundsSupported() {
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  return false;
+#else
+  return true;
+#endif
+}
+
+bool Window::PerformTitleBarDoubleClick() {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !IsWindow(hwnd) || IsFullScreen() || IsIconic(hwnd) || !IsMaximizable())
+    return false;
+  SendMessageW(hwnd, WM_SYSCOMMAND, IsZoomed(hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
+  return true;
+}
+
+void Window::StartDragging() {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd)) return;
+  if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      window.StartDragging();
+      return true;
+    });
+    return;
+  }
+  if (IsFullScreen()) return;
+  if (pimpl_->hwnd_) {
+    StartSystemFrameDrag(pimpl_->hwnd_, HTCAPTION);
+  }
+}
+
+void Window::StartResizing(ResizeEdge edge) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!hwnd || !::IsWindow(hwnd)) return;
+  if (GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    (void)detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      window.StartResizing(edge);
+      return true;
+    });
+    return;
+  }
+  if (IsFullScreen()) return;
+  if (!pimpl_->hwnd_) {
+    return;
+  }
+  WPARAM hit_test;
+  switch (edge) {
+    case ResizeEdge::Top:
+      hit_test = HTTOP;
+      break;
+    case ResizeEdge::Left:
+      hit_test = HTLEFT;
+      break;
+    case ResizeEdge::Right:
+      hit_test = HTRIGHT;
+      break;
+    case ResizeEdge::Bottom:
+      hit_test = HTBOTTOM;
+      break;
+    case ResizeEdge::TopLeft:
+      hit_test = HTTOPLEFT;
+      break;
+    case ResizeEdge::TopRight:
+      hit_test = HTTOPRIGHT;
+      break;
+    case ResizeEdge::BottomLeft:
+      hit_test = HTBOTTOMLEFT;
+      break;
+    case ResizeEdge::BottomRight:
+    default:
+      hit_test = HTBOTTOMRIGHT;
+      break;
+  }
+  StartSystemFrameDrag(pimpl_->hwnd_, hit_test);
+}
+
+WindowNumber Window::GetNativeNumber() const {
+  return 0;
+}
+
+WindowId Window::GetId() const {
+  if (!pimpl_) {
+    return IdAllocator::kInvalidId;
+  }
+  return pimpl_->window_id_;
+}
+
+void* Window::GetNativeObjectInternal() const {
+  return pimpl_ ? reinterpret_cast<void*>(pimpl_->hwnd_) : nullptr;
+}
+
+bool Window::SetShape(std::shared_ptr<WindowShape> shape) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (!IsWindow(hwnd)) return false;
+  if (!shape) {
+    RemovePropW(hwnd, kShapedProperty);
+    if (!SetWindowRgn(hwnd, nullptr, FALSE)) return false;
+    UpdateFrameRendering(hwnd, true);
+    // A changed top-level region can invalidate child composition surfaces
+    // without requesting their paint (e.g. Flutter's view). Repaint the whole
+    // hierarchy so retained content is visible without another user interaction.
+    // Let WM_PAINT run normally: a synchronous paint here can precede the
+    // embedding framework's pending layout/frame update. No erase: see below.
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+    return true;
+  }
+  if (shape->GetPointCount() < 3 || GetTitleBarStyle() != TitleBarStyle::Hidden) return false;
+  // A shaped window has no frame; drop it first, so that the client origin below is final.
+  // Only once: SetShape may run on every frame of an animated contour. The property goes
+  // on before the region, so that DropThemeRegion leaves the region alone.
+  if (!GetPropW(hwnd, kShapedProperty)) {
+    SetPropW(hwnd, kShapedProperty, reinterpret_cast<HANDLE>(1));
+    UpdateFrameRendering(hwnd, true);
+  }
+  const double scale = GetScaleFactorForWindow(hwnd);
+  RECT frame;
+  POINT origin = {0, 0};
+  // Undoes the property set above when no region gets applied.
+  auto unshape = [&] {
+    if (HasWindowRegion(hwnd)) return false;
+    RemovePropW(hwnd, kShapedProperty);
+    UpdateFrameRendering(hwnd, true);
+    return false;
+  };
+  if (!GetWindowRect(hwnd, &frame) || !ClientToScreen(hwnd, &origin)) return unshape();
+  std::vector<POINT> points;
+  for (size_t i = 0; i < shape->GetPointCount(); ++i) {
+    const auto p = shape->GetPointAt(i);
+    points.push_back({static_cast<LONG>(std::lround(p.x * scale)) + origin.x - frame.left,
+                      static_cast<LONG>(std::lround(p.y * scale)) + origin.y - frame.top});
+  }
+  HRGN region = CreatePolygonRgn(points.data(), static_cast<int>(points.size()), ALTERNATE);
+  if (!region) return unshape();
+  // No redraw from SetWindowRgn itself: it erases what the new region exposes, and a
+  // window whose content comes from a child swap chain (Flutter's view) shows that
+  // erased area white until the child presents again, which during an animated
+  // contour is a white flash on every frame the region grows. The children are
+  // invalidated below without an erase instead.
+  if (!SetWindowRgn(hwnd, region, FALSE)) {
+    DeleteObject(region);
+    return unshape();
+  }
+  // Redraws the soft shadow from the region now in place.
+  UpdateFrameRendering(hwnd, true);
+  RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE | RDW_ALLCHILDREN);
+  return true;
+}
+
+bool Window::IsShaped() const {
+  return IsWindow(pimpl_->hwnd_) && GetPropW(pimpl_->hwnd_, kShapedProperty) != nullptr;
+}
+
+bool Window::IsShapeSupported() { return true; }
+
+bool Window::SetInputShape(std::shared_ptr<WindowShape> shape) { return false; }
+bool Window::IsInputShaped() const { return false; }
+bool Window::IsInputShapeSupported() { return false; }
+
+
+// Optional desktop window capabilities.
+bool Window::AnimateBounds(Rectangle) { return false; }
+bool Window::IsBoundsAnimationSupported() { return false; }
+bool Window::SetVisibleOnFullScreen(bool) { return false; }
+bool Window::IsVisibleOnFullScreen() const { return false; }
+bool Window::IsVisibleOnFullScreenSupported() { return false; }
+bool Window::GrabKeyboard() { return false; }
+bool Window::UngrabKeyboard() { return false; }
+bool Window::IsKeyboardGrabbed() const { return false; }
+bool Window::IsKeyboardGrabSupported() { return false; }
+
+bool Window::SetMaximizedVertically(bool is_maximized_vertically) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      return window.SetMaximizedVertically(is_maximized_vertically);
+    });
+  }
+  if (!hwnd || !::IsWindow(hwnd)) return false;
+  auto* previous = static_cast<detail::VerticalMaximize*>(
+      GetPropW(hwnd, detail::kVerticalMaximizeProperty));
+  if (!is_maximized_vertically) {
+    if (!previous) return true;
+    const bool active = IsMaximizedVertically();
+    const RECT original = previous->original;
+    RECT current = {};
+    GetWindowRect(hwnd, &current);
+    if (active && !SetWindowPos(hwnd, nullptr, current.left, original.top,
+        current.right - current.left, original.bottom - original.top,
+        SWP_NOACTIVATE | SWP_NOZORDER)) return false;
+    delete static_cast<detail::VerticalMaximize*>(
+        RemovePropW(hwnd, detail::kVerticalMaximizeProperty));
+    return true;
+  }
+  if (IsMinimized() || IsMaximized() || IsFullScreen() || detail::DockFor(hwnd)) return false;
+  if (IsMaximizedVertically()) return true;
+  MONITORINFO monitor = {sizeof(monitor)};
+  RECT current = {};
+  if (!GetWindowRect(hwnd, &current) ||
+      !GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+  detail::VerticalMaximize state{current, current};
+  state.applied.top = monitor.rcWork.top;
+  state.applied.bottom = monitor.rcWork.bottom;
+  if (!SetWindowPos(hwnd, nullptr, current.left, state.applied.top,
+      current.right - current.left, state.applied.bottom - state.applied.top,
+      SWP_NOACTIVATE | SWP_NOZORDER)) return false;
+  // Constraints may reject the requested height; do not claim a maximize then.
+  RECT actual = {};
+  if (!GetWindowRect(hwnd, &actual) || actual.top != state.applied.top ||
+      actual.bottom != state.applied.bottom) {
+    SetWindowPos(hwnd, nullptr, current.left, current.top,
+        current.right - current.left, current.bottom - current.top,
+        SWP_NOACTIVATE | SWP_NOZORDER);
+    return false;
+  }
+  auto* record = new detail::VerticalMaximize(state);
+  if (!SetPropW(hwnd, detail::kVerticalMaximizeProperty, record)) {
+    delete record;
+    SetWindowPos(hwnd, nullptr, current.left, current.top,
+        current.right - current.left, current.bottom - current.top,
+        SWP_NOACTIVATE | SWP_NOZORDER);
+    return false;
+  }
+  delete previous;
+  return true;
+}
+
+bool Window::IsMaximizedVertically() const {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      return window.IsMaximizedVertically();
+    });
+  }
+  if (!hwnd || !::IsWindow(hwnd) || IsMinimized() || IsMaximized() || IsFullScreen()) return false;
+  const auto* state = static_cast<detail::VerticalMaximize*>(
+      GetPropW(hwnd, detail::kVerticalMaximizeProperty));
+  RECT actual = {};
+  return state && GetWindowRect(hwnd, &actual) &&
+      actual.top == state->applied.top && actual.bottom == state->applied.bottom;
+}
+
+bool Window::IsVerticalMaximizeSupported() { return true; }
+
+bool Window::Dock(WindowDockSide side, double width) {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      return window.Dock(side, width);
+    });
+  }
+  if (!hwnd || !::IsWindow(hwnd) || !IsDockingSupported() || !std::isfinite(width) || width <= 0 ||
+      (side != WindowDockSide::Left && side != WindowDockSide::Right) ||
+      IsMinimized() || IsMaximized() || IsFullScreen() || IsMaximizedVertically()) return false;
+  MONITORINFO monitor = {sizeof(monitor)};
+  if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor) ||
+      width * GetDpiForWindow(hwnd) / 96.0 >= monitor.rcMonitor.right - monitor.rcMonitor.left)
+    return false;
+  auto state = detail::DockFor(hwnd);
+  if (state && state->side == side && state->width == width) return true;
+  const bool fresh = state == nullptr;
+  detail::DesktopDock before;
+  if (fresh) {
+    state = std::make_shared<detail::DesktopDock>();
+    state->side = side;
+    state->width = width;
+    if (!GetWindowRect(hwnd, &state->original) ||
+        !detail::StoreDock(hwnd, state)) {
+      return false;
+    }
+    auto data = detail::DockData(hwnd);
+    if (!SHAppBarMessage(ABM_NEW, &data)) {
+      detail::TakeDock(hwnd);
+      return false;
+    }
+  } else before = *state;
+  state->side = side;
+  state->width = width;
+  if (!detail::PositionDock(hwnd, *state)) {
+    if (fresh) {
+      const RECT original = state->original;
+      detail::TakeDock(hwnd);
+      auto data = detail::DockData(hwnd);
+      SHAppBarMessage(ABM_REMOVE, &data);
+      SetWindowPos(hwnd, nullptr, original.left, original.top,
+          original.right - original.left, original.bottom - original.top,
+          SWP_NOACTIVATE | SWP_NOZORDER);
+    } else {
+      *state = before;
+      detail::PositionDock(hwnd, *state);
+    }
+    return false;
+  }
+  detail::WindowDockDispatch::Emit(WindowDockedEvent(GetId(), side));
+  return true;
+}
+
+bool Window::Undock() {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), false, [=] {
+      Window window(hwnd);
+      return window.Undock();
+    });
+  }
+  if (!hwnd || !::IsWindow(hwnd) || !IsDockingSupported()) return false;
+  auto state = detail::DockFor(hwnd);
+  if (!state) return true;
+  auto data = detail::DockData(hwnd);
+  // Remove the property before notifying the shell, which can call us back.
+  detail::TakeDock(hwnd);
+  if (!SHAppBarMessage(ABM_REMOVE, &data)) {
+    detail::StoreDock(hwnd, state);
+    return false;
+  }
+  const RECT original = state->original;
+  SetWindowPos(hwnd, nullptr, original.left, original.top,
+      original.right - original.left, original.bottom - original.top,
+      SWP_NOACTIVATE | SWP_NOZORDER);
+  detail::WindowDockDispatch::Emit(WindowUndockedEvent(GetId()));
+  return true;
+}
+
+WindowDockSide Window::GetDockSide() const {
+  HWND hwnd = pimpl_->hwnd_;
+  if (hwnd && GetWindowThreadProcessId(hwnd, nullptr) != GetCurrentThreadId()) {
+    return detail::OnWindowThread(hwnd, GetId(), WindowDockSide::None, [=] {
+      Window window(hwnd);
+      return window.GetDockSide();
+    });
+  }
+  const auto state = hwnd && ::IsWindow(hwnd) ? detail::DockFor(hwnd) : nullptr;
+  return state ? state->side : WindowDockSide::None;
+}
+
+bool Window::IsDockingSupported() { return GetShellWindow() != nullptr; }
+
+}  // namespace nativeapi
+
+namespace nativeapi {
+bool Window::SetTitleBarColors(const Color& background, const Color& foreground) {
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  return SetWinUI3TitleBarColors(pimpl_->hwnd_, background, foreground);
+#else
+  return false;
+#endif
+}
+bool Window::ResetTitleBarColors() {
+#ifdef NATIVEAPI_ENABLE_WINUI3
+  return ResetWinUI3TitleBarColors(pimpl_->hwnd_);
+#else
+  return false;
+#endif
+}
+}

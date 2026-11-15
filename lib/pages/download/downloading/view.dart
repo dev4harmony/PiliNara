@@ -79,6 +79,10 @@ class _DownloadingPageState extends State<DownloadingPage>
                           downloadService: _downloadService,
                           showTitle: true,
                           isCurr: isCurr,
+                          customOnLongPress: () {
+                            this.enableMultiSelect.value = true;
+                            onSelect(entry);
+                          },
                           onDelete: () => _downloadService.deleteDownload(
                             entry: entry,
                             removeQueue: true,

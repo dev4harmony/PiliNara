@@ -274,7 +274,7 @@ class _VideoCardVState extends State<VideoCardV> {
                       videoItem.owner.name.toString(),
                     ),
                     maxLines: 1,
-                    overflow: .clip,
+                    overflow: .ellipsis,
                     semanticsLabel: 'UP：${remarkedName(
                       videoItem.owner.mid,
                       videoItem.owner.name.toString(),

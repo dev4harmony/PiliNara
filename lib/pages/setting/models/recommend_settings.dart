@@ -1,18 +1,15 @@
-import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/http/video.dart';
-import 'package:PiliPlus/models/common/rcmd_mode.dart';
+import 'package:PiliPlus/models/common/rcmd_source.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
-import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
+import 'package:PiliPlus/pages/setting/widgets/ordered_multi_select_dialog.dart';
 import 'package:PiliPlus/utils/global_data.dart';
-import 'package:PiliPlus/utils/login_utils.dart';
 import 'package:PiliPlus/utils/recommend_filter.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/user_whitelist.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
@@ -20,16 +17,10 @@ import 'package:material_ui/material_ui.dart';
 
 List<SettingsModel> get recommendSettings => [
   NormalModel(
-    title: '首页推荐模式',
+    title: '首页推荐来源',
     leading: const Icon(Icons.model_training_outlined),
-    getSubtitle: () => '当前:「${Pref.rcmdMode.label}」',
+    getSubtitle: () => Pref.rcmdSources.map((e) => e.label).join(' → '),
     onTap: _showRcmdModeDialog,
-  ),
-  NormalModel(
-    title: 'buvid',
-    leading: const Icon(CustomIcons.identifier_circle),
-    getSubtitle: () => LoginUtils.buvid,
-    onTap: _showBuvidDialog,
   ),
   SwitchModel(
     title: '保留首页推荐刷新',
@@ -76,7 +67,7 @@ List<SettingsModel> get recommendSettings => [
     key: SettingBoxKey.banWordForRecommend,
     onChanged: (value) {
       RecommendFilter.rcmdRegExp = value;
-      RecommendFilter.enableFilter = value.pattern.isNotEmpty;
+      RecommendFilter.enableFilter = value.isNotEmpty;
     },
     banScope: '推荐、热门、分区、相关视频',
   ),
@@ -85,7 +76,7 @@ List<SettingsModel> get recommendSettings => [
     key: SettingBoxKey.banWordForRecommendUpName,
     onChanged: (value) {
       RecommendFilter.rcmdUpNameRegExp = value;
-      RecommendFilter.enableUpNameFilter = value.pattern.isNotEmpty;
+      RecommendFilter.enableUpNameFilter = value.isNotEmpty;
     },
   ),
   getListBanWordModel(
@@ -93,12 +84,12 @@ List<SettingsModel> get recommendSettings => [
     key: SettingBoxKey.banWordForZone,
     onChanged: (value) {
       VideoHttp.zoneRegExp = value;
-      VideoHttp.enableFilter = value.pattern.isNotEmpty;
+      VideoHttp.enableFilter = value.isNotEmpty;
     },
     banScope: 'App推荐、热门、分区',
   ),
   getListUidWithNameModel(
-    title: '屏蔽用户',
+    title: '推荐屏蔽用户',
     getUidsMap: () => Pref.recommendBlockedMids,
     setUidsMap: (uidsMap) {
       Pref.recommendBlockedMids = uidsMap;
@@ -110,7 +101,7 @@ List<SettingsModel> get recommendSettings => [
     },
   ),
   getListUidWithNameModel(
-    title: '白名单用户',
+    title: '推荐白名单用户',
     leading: const Icon(Icons.person_add_alt_1_outlined),
     emptySubtitle: '点击添加白名单用户',
     countSubtitleBuilder: (count) => '已加入白名单 $count 个用户',
@@ -138,18 +129,18 @@ List<SettingsModel> get recommendSettings => [
   NormalModel(
     title: '屏蔽无权查看视频',
     leading: const Icon(Icons.block_outlined),
-    getSubtitle: () => Pref.rcmdMode != RcmdMode.web
+    getSubtitle: () => Pref.rcmdSources.contains(RcmdSource.app)
         ? '仅对首页 app 端推荐生效，屏蔽无权查看的视频(如充电专属视频)'
-        : '仅对首页 app 端推荐生效，请先切换为App端推荐或合并模式',
+        : '仅对首页 app 端推荐生效，请先在推荐来源中选择App端',
     getTrailing: (_) => StreamBuilder<BoxEvent>(
       stream: GStorage.setting.watch().where(
         (event) =>
-            event.key == SettingBoxKey.rcmdMode ||
+            event.key == SettingBoxKey.rcmdSources ||
             event.key == SettingBoxKey.removeBlockedRcmd,
       ),
       builder: (_, _) => Switch(
         value: Pref.removeBlockedRcmd,
-        onChanged: Pref.rcmdMode != RcmdMode.web
+        onChanged: Pref.rcmdSources.contains(RcmdSource.app)
             ? (value) {
                 GStorage.setting.put(SettingBoxKey.removeBlockedRcmd, value);
               }
@@ -157,7 +148,7 @@ List<SettingsModel> get recommendSettings => [
       ),
     ),
     onTap: (context, setState) {
-      if (Pref.rcmdMode == RcmdMode.web) {
+      if (!Pref.rcmdSources.contains(RcmdSource.app)) {
         return;
       }
       GStorage.setting.put(
@@ -236,59 +227,25 @@ Future<void> _showRcmdModeDialog(
   BuildContext context,
   VoidCallback setState,
 ) async {
-  final res = await showDialog<RcmdMode>(
+  final res = await showDialog<List<RcmdSource>>(
     context: context,
-    builder: (context) => SelectDialog<RcmdMode>(
-      title: '首页推荐模式',
-      value: Pref.rcmdMode,
-      values: RcmdMode.values.map((e) => (e, e.label)).toList(),
+    builder: (context) => OrderedMultiSelectDialog<RcmdSource>(
+      title: const Text('推荐来源（按勾选顺序混排）'),
+      initValues: Pref.rcmdSources,
+      values: {for (final source in RcmdSource.values) source: source.label},
+      minSelections: 1,
+      subtitleBuilder: (context, source) => Text(switch (source) {
+        RcmdSource.app => '使用 App 端推荐',
+        RcmdSource.web => '使用网页首页推荐',
+        RcmdSource.desktop => '使用官方 Windows 客户端的推荐参数',
+      }),
     ),
   );
-  if (res != null) {
-    await GStorage.setting.put(SettingBoxKey.rcmdMode, res.index);
-    SmartDialog.showToast('重启生效');
-    setState();
+  if (res == null || res.isEmpty) return;
+  await Pref.setRcmdSources(res);
+  setState();
+  if (Get.isRegistered<RcmdController>()) {
+    Get.find<RcmdController>().switchSources(res);
   }
-}
-
-void _showBuvidDialog(BuildContext context, VoidCallback setState) {
-  String buvid = LoginUtils.buvid;
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('buvid'),
-      content: TextFormField(
-        autofocus: true,
-        initialValue: buvid,
-        onChanged: (value) => buvid = value,
-        inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r"\s"))],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Get.back();
-            Pref.buvid = LoginUtils.buvid = LoginUtils.generateBuvid();
-            setState();
-          },
-          child: const Text('随机'),
-        ),
-        TextButton(
-          onPressed: Get.back,
-          child: Text(
-            '取消',
-            style: TextStyle(color: ColorScheme.of(context).outline),
-          ),
-        ),
-        TextButton(
-          onPressed: () {
-            Get.back();
-            if (buvid.isEmpty) return;
-            Pref.buvid = LoginUtils.buvid = buvid;
-            setState();
-          },
-          child: const Text('确定'),
-        ),
-      ],
-    ),
-  );
+  SmartDialog.showToast('已切换为${res.map((e) => e.label).join(' → ')}');
 }

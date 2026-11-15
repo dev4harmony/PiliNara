@@ -25,16 +25,18 @@ class _DynamicsSettingState extends State<DynamicsSetting> {
     super.initState();
     if (widget.autoOpenKeywordFilter) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || list.isEmpty) {
+        if (!mounted) {
           return;
         }
-        final firstItem = list.first;
-        if (firstItem case NormalModel(:final onTap)) {
-          onTap?.call(context, () {
-            if (mounted) {
-              setState(() {});
-            }
-          });
+        for (final item in list) {
+          if (item is NormalModel && item.effectiveTitle == '动态关键词过滤') {
+            item.onTap?.call(context, () {
+              if (mounted) {
+                setState(() {});
+              }
+            });
+            break;
+          }
         }
       });
     }
@@ -62,7 +64,7 @@ class _DynamicsSettingState extends State<DynamicsSetting> {
               '* 屏蔽用户后，该用户发布的动态将不会显示。\n'
               '* 动态流屏蔽用户优先于白名单生效。\n'
               '* 白名单用户与推荐流/评论区共享，白名单优先于带货屏蔽和常规过滤。\n'
-              '* 关键词过滤支持正则表达式，多个关键词使用|分隔。\n'
+              '* 每行一个关键词，每行都是一条独立的正则表达式，命中任一即过滤。\n'
               '* 设置立即生效，刷新动态页面即可看到过滤结果。',
               style: theme.textTheme.labelSmall!.copyWith(
                 color: theme.colorScheme.outline.withValues(alpha: 0.7),

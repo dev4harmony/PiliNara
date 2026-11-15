@@ -1,0 +1,147 @@
+// AUTO-GENERATED. DO NOT EDIT.
+// Any manual changes WILL BE LOST when this file is regenerated.
+
+#include "keyboard_monitor_c.h"
+
+#include <cstdio>
+#include <memory>
+#include <new>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "string_utils_c.h"
+#include "user_data.h"
+#include "event_delivery.h"
+#include "../foundation/handle_table.h"
+#include "../foundation/keyboard.h"
+#include "keyboard_c.h"
+#include "../keyboard_monitor.h"
+
+native_keyboard_monitor_t native_keyboard_monitor_create(void) {
+  try {
+    return nativeapi::HandleTable::GetInstance().Insert(
+        std::make_shared<nativeapi::KeyboardMonitor>());
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_keyboard_monitor_create");
+    return 0;
+  }
+}
+
+void native_keyboard_monitor_start(native_keyboard_monitor_t keyboard_monitor) {
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return;
+  }
+  try {
+    self->Start();
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_keyboard_monitor_start");
+    return;
+  }
+}
+
+void native_keyboard_monitor_stop(native_keyboard_monitor_t keyboard_monitor) {
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return;
+  }
+  try {
+    self->Stop();
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_keyboard_monitor_stop");
+    return;
+  }
+}
+
+bool native_keyboard_monitor_is_monitoring(native_keyboard_monitor_t keyboard_monitor) {
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return false;
+  }
+  try {
+    return self->IsMonitoring();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_keyboard_monitor_is_monitoring");
+    return false;
+  }
+}
+
+void native_keyboard_monitor_free(native_keyboard_monitor_t keyboard_monitor) {
+  // The table invalidates the handle itself, so releasing an unknown or
+  // already-released one is a no-op rather than a double free.
+  nativeapi::HandleTable::GetInstance().Release(keyboard_monitor);
+}
+
+native_listener_id_t native_keyboard_monitor_add_listener(native_keyboard_monitor_t keyboard_monitor, native_keyboard_event_callback_t callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) {
+    return 0;
+  }
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return 0;
+  }
+  try {
+    return static_cast<native_listener_id_t>(self->AddListener<nativeapi::KeyboardEvent>(
+        [callback, holder](const nativeapi::KeyboardEvent& event) {
+          if (holder->revoked()) return;
+          native_keyboard_event_t c_event = {};
+          if (!to_c_keyboard_event(event, &c_event)) {
+            return;
+          }
+          callback(&c_event, holder->get());
+          free_c_keyboard_event(&c_event);
+        }));
+  } catch (...) {
+    return 0;
+  }
+}
+
+native_listener_id_t native_keyboard_monitor_add_listener_async(native_keyboard_monitor_t keyboard_monitor, native_keyboard_event_callback_t_async callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) return 0;
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return 0;
+  }
+  try {
+    auto registration = std::make_shared<nativeapi::capi::EventDeliveryRegistration>(holder);
+    return static_cast<native_listener_id_t>(nativeapi::detail::EventListenerDispatch::AddListener<nativeapi::KeyboardEvent>(*self,
+        [callback, registration](const nativeapi::KeyboardEvent& event) {
+          if (registration->context->holder->revoked()) return;
+          std::shared_ptr<nativeapi::EventRequest> request;
+          auto vote = request && request->IsCancelable() ? request->Defer() : nullptr;
+          native_event_delivery_t delivery = 0;
+          try {
+            auto payload = std::shared_ptr<native_keyboard_event_t>(new native_keyboard_event_t{}, [](native_keyboard_event_t* value) { free_c_keyboard_event(value); delete value; });
+            if (!to_c_keyboard_event(event, payload.get())) { if (request) request->Cancel(); return; }
+            auto* event_pointer = payload.get();
+            auto lease = std::make_shared<nativeapi::capi::EventDelivery>(registration->context, std::move(payload), std::move(vote));
+            delivery = nativeapi::HandleTable::GetInstance().Insert(lease);
+            callback(event_pointer, delivery, registration->context->holder->get());
+          } catch (...) {
+            if (request) request->Cancel();
+            if (delivery) native_event_delivery_complete(delivery, false);
+          }
+        }, registration->context->active));
+  } catch (...) {
+    return 0;
+  }
+}
+
+bool native_keyboard_monitor_remove_listener(native_keyboard_monitor_t keyboard_monitor, native_listener_id_t listener_id) {
+  auto self = nativeapi::HandleTable::GetInstance().Resolve<nativeapi::KeyboardMonitor>(keyboard_monitor);
+  if (!self) {
+    return false;
+  }
+  try {
+    return self->RemoveListener(static_cast<size_t>(listener_id));
+  } catch (...) {
+    return false;
+  }
+}
+

@@ -55,6 +55,8 @@
     <img width="200" height="200" src="assets/images/logo/logo.png">
 </div>
 
+
+
 <div align="center">
     <h1>PiliNara</h1>
 <div align="center">
@@ -70,6 +72,7 @@
 <img src="assets/screenshots/main_screen.png" width="96%" alt="home" />
 <br/>
 </div>
+
 
 <br/>
 
@@ -235,7 +238,7 @@ Fork特性：
 - [x] 超分辨率
 - [x] 会员彩色弹幕
 - [x] 播放全部/继续播放/倒序播放
-- [x] Cookie 登录
+- [x] Cookie登录
 - [x] 显示视频分段信息
 - [x] 调节字幕大小
 - [x] 调节全屏弹幕大小
@@ -257,7 +260,7 @@ Fork特性：
 - [x] 三连动画
 - [x] 番剧三连
 - [x] 带图评论
-- [x] 视频 TAG
+- [x] 视频TAG
 - [x] 筛选搜索
 - [x] 转发动态
 - [x] 合集图片
@@ -278,8 +281,8 @@ Fork特性：
 - [x] 评论显示
 - [x] 亮度调节
 - [x] 视频播放
-- [x] 视频 staff
-- [x] 防止 bottomsheet 遮挡全屏视频
+- [x] 视频staff
+- [x] 防止bottomsheet遮挡全屏视频
 - [x] 其他
 
 ## fix
@@ -291,7 +294,7 @@ Fork特性：
 
 ## 功能
 
-- [x] 推荐视频列表(app 端)
+- [x] 推荐视频列表(app端)
 - [x] 最热视频列表
 - [x] 热门直播
 - [x] 番剧列表
@@ -308,6 +311,7 @@ Fork特性：
   - [x] 观看记录
   - [x] 我的收藏
   - [x] 站内私信
+  
 - [x] 动态相关
   - [x] 全部、投稿、番剧分类查看
   - [x] 动态评论查看
@@ -320,7 +324,7 @@ Fork特性：
   - [x] 垂直方向上滑全屏、下滑退出全屏
   - [x] 水平方向手势快进/快退
   - [x] 全屏方向设置
-  - [x] 倍速选择/长按 2 倍速
+  - [x] 倍速选择/长按2倍速
   - [x] 硬件加速（视机型而定）
   - [x] 画质选择（高清画质未解锁）
   - [x] 音质选择（视视频而定）
@@ -329,14 +333,16 @@ Fork特性：
   - [x] 字幕
   - [x] 记忆播放
   - [x] 视频比例：高度/宽度适应、填充、包含等
+     
 - [x] 搜索相关
   - [x] 热搜
   - [x] 搜索历史
   - [x] 默认搜索词
   - [x] 投稿、番剧、直播间、用户搜索
   - [x] 视频搜索排序、按时长筛选
+    
 - [x] 视频详情页相关
-  - [x] 视频选集(分 p)切换
+  - [x] 视频选集(分p)切换
   - [x] 点赞、投币、收藏/取消收藏
   - [x] 相关视频查看
   - [x] 评论用户身份标识
@@ -346,7 +352,7 @@ Fork特性：
   - [x] 评论笔记图片查看、保存
 
 - [x] 设置相关
-  - [x] 画质、音质、解码方式预设
+  - [x] 画质、音质、解码方式预设      
   - [x] 图片质量设定
   - [x] 主题模式：亮色/暗色/跟随系统
   - [x] 震动反馈(可选)
@@ -359,7 +365,7 @@ Fork特性：
 
 ## 下载
 
-可以从 [Releases](https://github.com/dev4harmony/PiliNara/releases) 下载，或克隆仓库拉取代码后在本地编译。
+可以从 [Releases](https://github.com/Starfallan/PiliNara/releases) 下载，或克隆仓库拉取代码后在本地编译。
 
 ### Arch Linux
 
@@ -401,6 +407,7 @@ yay -S pilinara-bin
 
 感谢使用
 
+
 <br/>
 
 ## 致谢
@@ -415,12 +422,13 @@ yay -S pilinara-bin
 <br/>
 <br/>
 
-## Star History
 
-<a href="https://star-history.dera.page/#Starfallan/PiliNara">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Starfallan/PiliNara&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Starfallan/PiliNara" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Starfallan/PiliNara" />
- </picture>
+## Star History
+
+<a href="https://www.star-history.com/?repos=starfallan%2Fpilinara&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=starfallan/pilinara&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=starfallan/pilinara&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=starfallan/pilinara&type=date&legend=top-left" />
+ </picture>
 </a>

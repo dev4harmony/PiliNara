@@ -13,7 +13,6 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/wbi_sign.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:material_ui/material_ui.dart';
 import 'package:get/get.dart';
 import 'package:os_type/os_type.dart';
@@ -155,11 +154,10 @@ class HomeController extends GetxController
   }
 
   @override
-  Future<void> onRefresh() {
-    return controller.showRefresh().catchError((e) {
-      if (kDebugMode) debugPrint(e.toString());
-    });
-  }
+  Future<void> onRefresh() => controller.onRefresh();
+
+  @override
+  Future<void> showRefresh() => controller.showRefresh();
 
   @override
   void toTopAndRefresh() {

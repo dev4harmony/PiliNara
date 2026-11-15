@@ -65,23 +65,14 @@ void _addDynFilterItem(
           ),
           onConfirm: () {
             final currentStored = Pref.banWordForDyn;
-            // 检查是否已存在（按行分割检查）
-            final existingKeywords = currentStored.isEmpty
-                ? <String>[]
-                : currentStored.split('\n');
+            final existingKeywords = Pref.parseBanWordItems(currentStored);
             if (existingKeywords.contains(escapedText)) {
               SmartDialog.showToast('该关键词已在过滤列表中');
               return;
             }
-            final newStored = currentStored.isEmpty
-                ? escapedText
-                : '$currentStored\n$escapedText';
+            final newStored = [...existingKeywords, escapedText].join('\n');
             GStorage.setting.put(SettingBoxKey.banWordForDyn, newStored);
-            final newPattern = Pref.parseBanWordToRegex(newStored);
-            DynamicsDataModel.banWordForDyn = RegExp(
-              newPattern,
-              caseSensitive: true,
-            );
+            DynamicsDataModel.banWordForDyn = Pref.compileBanWord(newStored);
             DynamicsDataModel.enableFilter = true;
             SmartDialog.showToast('已保存');
           },

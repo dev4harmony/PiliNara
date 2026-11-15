@@ -1,0 +1,286 @@
+// AUTO-GENERATED. DO NOT EDIT.
+// Any manual changes WILL BE LOST when this file is regenerated.
+
+#include "shortcut_manager_c.h"
+
+#include <cstdio>
+#include <memory>
+#include <new>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "string_utils_c.h"
+#include "user_data.h"
+#include "event_delivery.h"
+#include "../foundation/handle_table.h"
+#include "../shortcut.h"
+#include "shortcut_c.h"
+#include "../shortcut_manager.h"
+
+bool native_shortcut_manager_is_supported(void) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().IsSupported();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_is_supported");
+    return false;
+  }
+}
+
+native_shortcut_t native_shortcut_manager_register_with_accelerator_and_callback(const char* accelerator, native_shortcut_manager_register_callback_t callback, void* callback_user_data, native_release_user_data_t callback_release_user_data) {
+  auto callback_holder = nativeapi::capi::UserData::Make(callback_user_data, callback_release_user_data);
+  try {
+    std::function<void()> callback_cpp;
+    if (callback) {
+      callback_cpp = [callback, callback_holder]() { if (!callback_holder->revoked()) callback(callback_holder->get()); };
+    }
+    return nativeapi::HandleTable::GetInstance().Insert(nativeapi::ShortcutManager::GetInstance().Register(std::string(accelerator ? accelerator : ""), callback_cpp));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_register_with_accelerator_and_callback");
+    return 0;
+  }
+}
+
+native_shortcut_t native_shortcut_manager_register_with_options(native_shortcut_options_t options) {
+  try {
+    auto options_cpp = to_cpp_shortcut_options(options);
+    return nativeapi::HandleTable::GetInstance().Insert(nativeapi::ShortcutManager::GetInstance().Register(options_cpp));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_register_with_options");
+    return 0;
+  }
+}
+
+native_shortcut_id_t native_shortcut_manager_request_registration(native_shortcut_options_t options, const char* registration_key) {
+  try {
+    auto options_cpp = to_cpp_shortcut_options(options);
+    return nativeapi::ShortcutManager::GetInstance().RequestRegistration(options_cpp, std::string(registration_key ? registration_key : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_request_registration");
+    return 0;
+  }
+}
+
+bool native_shortcut_manager_cancel_registration(native_shortcut_id_t request_id) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().CancelRegistration(request_id);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_cancel_registration");
+    return false;
+  }
+}
+
+unsigned long native_shortcut_manager_cancel_pending_registrations(const char* registration_key_prefix) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().CancelPendingRegistrations(std::string(registration_key_prefix ? registration_key_prefix : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_cancel_pending_registrations");
+    return 0;
+  }
+}
+
+bool native_shortcut_manager_is_registration_pending(native_shortcut_id_t request_id) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().IsRegistrationPending(request_id);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_is_registration_pending");
+    return false;
+  }
+}
+
+bool native_shortcut_manager_unregister_with_id(native_shortcut_id_t id) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().Unregister(id);
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_unregister_with_id");
+    return false;
+  }
+}
+
+bool native_shortcut_manager_unregister_with_accelerator(const char* accelerator) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().Unregister(std::string(accelerator ? accelerator : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_unregister_with_accelerator");
+    return false;
+  }
+}
+
+int native_shortcut_manager_unregister_all(void) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().UnregisterAll();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_unregister_all");
+    return 0;
+  }
+}
+
+native_shortcut_t native_shortcut_manager_get_with_id(native_shortcut_id_t id) {
+  try {
+    return nativeapi::HandleTable::GetInstance().Insert(nativeapi::ShortcutManager::GetInstance().Get(id));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_get_with_id");
+    return 0;
+  }
+}
+
+native_shortcut_t native_shortcut_manager_get_with_accelerator(const char* accelerator) {
+  try {
+    return nativeapi::HandleTable::GetInstance().Insert(nativeapi::ShortcutManager::GetInstance().Get(std::string(accelerator ? accelerator : "")));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_get_with_accelerator");
+    return 0;
+  }
+}
+
+native_shortcut_list_t native_shortcut_manager_get_all(void) {
+  try {
+    const auto items = nativeapi::ShortcutManager::GetInstance().GetAll();
+    native_shortcut_list_t list = {};
+    if (items.empty()) {
+      return list;
+    }
+    list.shortcuts = new (std::nothrow) native_shortcut_t[items.size()];
+    if (!list.shortcuts) {
+      return list;
+    }
+    for (size_t i = 0; i < items.size(); ++i) {
+      list.shortcuts[i] = nativeapi::HandleTable::GetInstance().Insert(items[i]);
+    }
+    list.count = static_cast<long>(items.size());
+    return list;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_get_all");
+    native_shortcut_list_t empty = {};
+    return empty;
+  }
+}
+
+native_shortcut_list_t native_shortcut_manager_get_by_scope(native_shortcut_scope_t scope) {
+  try {
+    const auto items = nativeapi::ShortcutManager::GetInstance().GetByScope(to_cpp_shortcut_scope(scope));
+    native_shortcut_list_t list = {};
+    if (items.empty()) {
+      return list;
+    }
+    list.shortcuts = new (std::nothrow) native_shortcut_t[items.size()];
+    if (!list.shortcuts) {
+      return list;
+    }
+    for (size_t i = 0; i < items.size(); ++i) {
+      list.shortcuts[i] = nativeapi::HandleTable::GetInstance().Insert(items[i]);
+    }
+    list.count = static_cast<long>(items.size());
+    return list;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_get_by_scope");
+    native_shortcut_list_t empty = {};
+    return empty;
+  }
+}
+
+bool native_shortcut_manager_is_available(const char* accelerator) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().IsAvailable(std::string(accelerator ? accelerator : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_is_available");
+    return false;
+  }
+}
+
+bool native_shortcut_manager_is_valid_accelerator(const char* accelerator) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().IsValidAccelerator(std::string(accelerator ? accelerator : ""));
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_is_valid_accelerator");
+    return false;
+  }
+}
+
+void native_shortcut_manager_set_enabled(bool enabled) {
+  try {
+    nativeapi::ShortcutManager::GetInstance().SetEnabled(enabled);
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_set_enabled");
+    return;
+  }
+}
+
+bool native_shortcut_manager_is_enabled(void) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().IsEnabled();
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_is_enabled");
+    return false;
+  }
+}
+
+void native_shortcut_manager_emit_shortcut_activated(native_shortcut_id_t id, const char* accelerator) {
+  try {
+    nativeapi::ShortcutManager::GetInstance().EmitShortcutActivated(id, std::string(accelerator ? accelerator : ""));
+    return;
+  } catch (...) {
+    fprintf(stderr, "[nativeapi] %s: unexpected exception\n", "native_shortcut_manager_emit_shortcut_activated");
+    return;
+  }
+}
+
+native_listener_id_t native_shortcut_manager_add_listener(native_shortcut_event_callback_t callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) {
+    return 0;
+  }
+  try {
+    return static_cast<native_listener_id_t>(nativeapi::ShortcutManager::GetInstance().AddListener<nativeapi::ShortcutEvent>(
+        [callback, holder](const nativeapi::ShortcutEvent& event) {
+          if (holder->revoked()) return;
+          native_shortcut_event_t c_event = {};
+          if (!to_c_shortcut_event(event, &c_event)) {
+            return;
+          }
+          callback(&c_event, holder->get());
+          free_c_shortcut_event(&c_event);
+        }));
+  } catch (...) {
+    return 0;
+  }
+}
+
+native_listener_id_t native_shortcut_manager_add_listener_async(native_shortcut_event_callback_t_async callback, void* user_data, native_release_user_data_t release_user_data) {
+  auto holder = nativeapi::capi::UserData::Make(user_data, release_user_data);
+  if (!callback) return 0;
+  try {
+    auto registration = std::make_shared<nativeapi::capi::EventDeliveryRegistration>(holder);
+    return static_cast<native_listener_id_t>(nativeapi::detail::EventListenerDispatch::AddListener<nativeapi::ShortcutEvent>(nativeapi::ShortcutManager::GetInstance(),
+        [callback, registration](const nativeapi::ShortcutEvent& event) {
+          if (registration->context->holder->revoked()) return;
+          std::shared_ptr<nativeapi::EventRequest> request;
+          auto vote = request && request->IsCancelable() ? request->Defer() : nullptr;
+          native_event_delivery_t delivery = 0;
+          try {
+            auto payload = std::shared_ptr<native_shortcut_event_t>(new native_shortcut_event_t{}, [](native_shortcut_event_t* value) { free_c_shortcut_event(value); delete value; });
+            if (!to_c_shortcut_event(event, payload.get())) { if (request) request->Cancel(); return; }
+            auto* event_pointer = payload.get();
+            auto lease = std::make_shared<nativeapi::capi::EventDelivery>(registration->context, std::move(payload), std::move(vote));
+            delivery = nativeapi::HandleTable::GetInstance().Insert(lease);
+            callback(event_pointer, delivery, registration->context->holder->get());
+          } catch (...) {
+            if (request) request->Cancel();
+            if (delivery) native_event_delivery_complete(delivery, false);
+          }
+        }, registration->context->active));
+  } catch (...) {
+    return 0;
+  }
+}
+
+bool native_shortcut_manager_remove_listener(native_listener_id_t listener_id) {
+  try {
+    return nativeapi::ShortcutManager::GetInstance().RemoveListener(static_cast<size_t>(listener_id));
+  } catch (...) {
+    return false;
+  }
+}
+

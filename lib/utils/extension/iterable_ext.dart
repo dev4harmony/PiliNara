@@ -43,11 +43,34 @@ extension ListExt<T> on List<T> {
     return List<R>.from(this);
   }
 
+  /// 取满足 [test] 的最大项；没有满足项时回落到全体最大值（fork 半屏画质规则用）
   T findClosestTarget(
     bool Function(T) test,
     T Function(T, T) combine,
   ) {
     return where(test).reduceOrNull(combine) ?? reduce(combine);
+  }
+
+  T findTargetMedia(
+    int Function(T) test,
+    int preferId,
+  ) {
+    T? selected;
+    int selectedId = -1;
+    T? lowest;
+    int lowestId = 1 << 31;
+    for (final e in this) {
+      final id = test(e);
+      if (id <= preferId && id > selectedId) {
+        selected = e;
+        selectedId = id;
+      }
+      if (id < lowestId) {
+        lowest = e;
+        lowestId = id;
+      }
+    }
+    return selected ?? lowest ?? first;
   }
 
   /// from [algorithms.lowerBoundBy].

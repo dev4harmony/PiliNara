@@ -170,6 +170,9 @@ test*
 
 .agents
 skills-lock.json
+# 上游 2.6.2 追加：保留 test/ 目录（上面 167 行的 test* 会误伤）
+!/test/
+!/test/**
 
 ohos/.codegenie
 .codex/skills/deveco-cli/SKILL.md

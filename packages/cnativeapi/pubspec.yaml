@@ -1,0 +1,52 @@
+# 本地 shim 包：上游 cnativeapi 0.5.10 的副本，仅修改 hook/build.dart。
+#
+# 为什么需要：
+#   nativeapi（及依赖它的 window_manager 0.6 / tray_manager 0.8）底层是
+#   cnativeapi，后者用 build hook 从 C 源码现场编译原生库。上游 hook 只认
+#   android/ios/linux/macos/windows，遇到 ohos 会 throw UnsupportedError。
+#   而鸿蒙构建会强制执行 AotOhosAssetBundle -> LinkHooks -> BuildHooks，
+#   只要依赖树里有带 hook/build.dart 的包就一定跑，失败即整次
+#   `flutter build hap` 失败（不是 warning，无法用 feature flag 关闭）。
+#
+# 改了什么：
+#   只有 hook/build.dart 增加了 `if (targetOS == OS.ohos) return;`。
+#   ohos 目标不再编译原生库，产出空 code assets；其余平台行为与上游逐字节一致。
+#   Dart 侧 @ffi.Native external 声明编译期不需要原生库，只有运行时真正调用
+#   才会失败——而 nativeapi / window_manager / tray_manager 在鸿蒙没有任何
+#   调用路径（window_manager 至今不在 ohos 的 GeneratedPluginRegistrant 里，
+#   与替换前使用的 window_manager fork 情况相同）。
+#
+# 为什么不直接跟随上游：
+#   上游没有为 ohos 提供支持的 cnativeapi fork（已核对 CPF-Flutter/
+#   fluttertpc_dart_native，只有 jni/jnigen/ffi/native_toolchain_c）。
+#
+# 退出方式（任一成立即可删除本目录、把根 pubspec 的 dependency_overrides
+# 改回 pub 版本）：
+#   1) 上游 cnativeapi 的 hook 支持 ohos；
+#   2) 鸿蒙侧不再依赖 nativeapi 家族（不再跟随上游的 window_manager 0.6）。
+#
+# 升级方式：取新版本 cnativeapi 的 lib/ + src/ + cxx_impl/ + hook/build.dart，
+# 在 hook 里重新加上同一段 ohos 短路返回。
+name: cnativeapi
+description: "Local shim of cnativeapi that skips native compilation on HarmonyOS targets."
+version: 0.5.10
+homepage: https://github.com/libnativeapi/nativeapi
+repository: https://github.com/libnativeapi/nativeapi/tree/main/bindings/dart/cnativeapi
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+
+dependencies:
+  code_assets: ^2.1.0
+  ffi: ">=1.2.1 <3.0.0"
+  hooks: ^2.2.0
+  logging: ^1.3.0
+  native_toolchain_c: ^0.19.5

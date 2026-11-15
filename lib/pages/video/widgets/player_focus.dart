@@ -136,6 +136,27 @@ class PlayerFocus extends StatelessWidget {
       return true;
     }
 
+    if (key == .arrowLeft) {
+      if (!plPlayerController.isLive) {
+        if (event is KeyDownEvent) {
+          if (hasPlayer) {
+            plPlayerController
+              ..longPressTimer?.cancel()
+              ..longPressTimer = Timer.periodic(
+                const Duration(milliseconds: 200),
+                plPlayerController.multiBackwardStart,
+              );
+          }
+        } else if (event is KeyUpEvent) {
+          plPlayerController.cancelLongPressTimer();
+          if (hasPlayer) {
+            plPlayerController.multiBackwardEnd();
+          }
+        }
+      }
+      return true;
+    }
+
     if (key == LogicalKeyboardKey.arrowRight) {
       if (!plPlayerController.isLive) {
         if (event is KeyDownEvent) {
@@ -213,8 +234,9 @@ class PlayerFocus extends StatelessWidget {
         case LogicalKeyboardKey.keyM:
           if (hasPlayer) {
             final isMuted = !plPlayerController.isMuted;
-            plPlayerController.videoPlayerController!.setVolume(
-              isMuted ? 0 : plPlayerController.volume.value * 100,
+            plPlayerController.setVolumeCapped(
+              plPlayerController.videoPlayerController,
+              isMuted ? 0 : plPlayerController.volume.value,
             );
             plPlayerController.isMuted = isMuted;
             SmartDialog.showToast('${isMuted ? '' : '取消'}静音');
@@ -256,14 +278,6 @@ class PlayerFocus extends StatelessWidget {
         }
 
         switch (key) {
-          case LogicalKeyboardKey.arrowLeft:
-            if (hasPlayer) {
-              plPlayerController.onBackward(
-                plPlayerController.fastForBackwardDuration,
-              );
-            }
-            return true;
-
           case LogicalKeyboardKey.keyW:
             if (HardwareKeyboard.instance.isMetaPressed) {
               return true;

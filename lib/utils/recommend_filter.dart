@@ -12,16 +12,12 @@ abstract final class RecommendFilter {
   static bool applyFilterToRankVideos = Pref.applyFilterToRankVideos;
   static bool applyFilterToSearch = Pref.applyFilterToSearch;
 
-  static RegExp rcmdRegExp = RegExp(
-    Pref.parseBanWordToRegex(Pref.banWordForRecommend),
-    caseSensitive: false,
+  static List<RegExp> rcmdRegExp = Pref.compileBanWord(Pref.banWordForRecommend);
+  static bool enableFilter = rcmdRegExp.isNotEmpty;
+  static List<RegExp> rcmdUpNameRegExp = Pref.compileBanWord(
+    Pref.banWordForRecommendUpName,
   );
-  static bool enableFilter = rcmdRegExp.pattern.isNotEmpty;
-  static RegExp rcmdUpNameRegExp = RegExp(
-    Pref.parseBanWordToRegex(Pref.banWordForRecommendUpName),
-    caseSensitive: false,
-  );
-  static bool enableUpNameFilter = rcmdUpNameRegExp.pattern.isNotEmpty;
+  static bool enableUpNameFilter = rcmdUpNameRegExp.isNotEmpty;
   static Map<int, String> recommendBlockedMids = Pref.recommendBlockedMids;
 
   static bool isWhitelisted(int? mid) {

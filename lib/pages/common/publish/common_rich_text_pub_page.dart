@@ -43,6 +43,7 @@ abstract class CommonRichTextPubPage
     this.pics,
     super.onSave,
     super.autofocus,
+    super.panelType,
     super.imageLengthLimit,
   });
 
@@ -55,7 +56,7 @@ abstract class CommonRichTextPubPageState<T extends CommonRichTextPubPage>
   final key = GlobalKey<RichTextFieldState>();
   late final imagePicker = ImagePicker();
   late final RxList<PicModel> imageList;
-  int get limit => widget.imageLengthLimit ?? 9;
+  int get limit => widget.imageLengthLimit;
 
   @override
   late final RichTextEditingController editController;
@@ -113,7 +114,6 @@ abstract class CommonRichTextPubPageState<T extends CommonRichTextPubPage>
       children: [
         GestureDetector(
           onTap: () async {
-            controller.keepChatPanel();
             await PageUtils.imageView(
               imgList: imageList
                   .map(
@@ -131,7 +131,6 @@ abstract class CommonRichTextPubPageState<T extends CommonRichTextPubPage>
                   .toList(),
               initialPage: index,
             );
-            controller.restoreChatPanel();
           },
           onLongPress: () {
             Feedback.forLongPress(context);
@@ -341,8 +340,6 @@ abstract class CommonRichTextPubPageState<T extends CommonRichTextPubPage>
   late double _mentionOffset = 0;
   MentionItem? get topMentionItem => null;
   Future<void>? onMention([bool fromClick = false]) async {
-    // 鸿蒙适配：@面板期间冻结聊天面板，避免面板高度被重置
-    controller.keepChatPanel();
     final res = await DynMentionPanel.onDynMention(
       context,
       offset: _mentionOffset,
@@ -360,7 +357,6 @@ abstract class CommonRichTextPubPageState<T extends CommonRichTextPubPage>
         res.clear();
       }
     }
-    controller.restoreChatPanel();
   }
 
   void _onInsertUser(MentionItem e, bool fromClick) {

@@ -137,30 +137,22 @@ class _ReplyPageState extends CommonRichTextPubPageState<ReplyPage> {
   List<Widget> buildInputView() {
     return [
       Padding(
-        padding: const EdgeInsets.only(
-          top: 12,
-          right: 15,
-          left: 15,
-          bottom: 10,
-        ),
-        child: Obx(
-          () => RichTextField(
-            key: key,
-            controller: editController,
-            minLines: 4,
-            maxLines: 8,
-            autofocus: false,
-            readOnly: readOnly.value,
-            onChanged: onChanged,
-            onSubmitted: onSubmitted,
-            focusNode: focusNode,
-            decoration: InputDecoration(
-              hintText: widget.hint ?? "输入回复内容",
-              border: InputBorder.none,
-              hintStyle: const TextStyle(fontSize: 14),
-            ),
-            style: theme.textTheme.bodyLarge,
+        padding: const .only(top: 12, right: 15, left: 15, bottom: 10),
+        child: RichTextField(
+          key: key,
+          controller: editController,
+          minLines: 4,
+          maxLines: 8,
+          autofocus: false,
+          onChanged: onChanged,
+          onSubmitted: onSubmitted,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            hintText: widget.hint ?? "输入回复内容",
+            border: InputBorder.none,
+            hintStyle: const TextStyle(fontSize: 14),
           ),
+          style: theme.textTheme.bodyLarge,
         ),
       ),
       Divider(
@@ -287,8 +279,6 @@ class _ReplyPageState extends CommonRichTextPubPageState<ReplyPage> {
         children: [
           item(
             onTap: () async {
-              // 鸿蒙适配：跳转搜索页期间冻结聊天面板，避免面板高度被重置
-              controller.keepChatPanel();
               final ({String title, String url})? res = await Get.to(
                 ReplySearchPage(type: widget.replyType, oid: widget.oid),
               );
@@ -299,7 +289,6 @@ class _ReplyPageState extends CommonRichTextPubPageState<ReplyPage> {
                   rawText: '${res.url} ',
                 );
               }
-              controller.restoreChatPanel();
             },
             icon: Icon(Icons.post_add, size: 28, color: color),
             title: '插入内容',

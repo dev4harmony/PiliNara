@@ -261,20 +261,19 @@ class _LoginPageState extends State<LoginPage> {
       children: [
         const SizedBox(height: 20),
         const Text('使用账号密码登录'),
-        const SizedBox(height: 10),
-        // AutofillGroup：账号+密码组成一组，供系统密码保险箱识别、回填与保存
-        AutofillGroup(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 10,
-                ),
-                child: TextField(
+        const SizedBox(height: 20),
+        Padding(
+          padding: const .symmetric(horizontal: 20),
+          child: AutofillGroup(
+            child: Column(
+              spacing: 10,
+              children: [
+                TextField(
                   controller: _loginPageCtr.usernameTextController,
-                  autofillHints: const [AutofillHints.username],
-                  textInputAction: TextInputAction.next,
+                  autofillHints: const [
+                    AutofillHints.telephoneNumber,
+                    AutofillHints.email,
+                  ],
                   inputFormatters: [
                     FilteringTextInputFormatter.deny(RegExp(r"\s")),
                   ],
@@ -289,16 +288,9 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 10,
-                ),
-                child: TextField(
+                TextField(
                   obscureText: !showPassword,
                   keyboardType: TextInputType.visiblePassword,
-                  textInputAction: TextInputAction.done,
                   inputFormatters: [
                     FilteringTextInputFormatter.deny(RegExp(r"\s")),
                   ],
@@ -314,8 +306,8 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         Row(
@@ -336,15 +328,10 @@ class _LoginPageState extends State<LoginPage> {
                   builder: (context) => SimpleDialog(
                     clipBehavior: Clip.hardEdge,
                     title: const Text('忘记密码？'),
-                    contentPadding: const EdgeInsets.fromLTRB(
-                      0.0,
-                      2.0,
-                      0.0,
-                      16.0,
-                    ),
+                    contentPadding: const .only(top: 2, bottom: 16),
                     children: [
                       const Padding(
-                        padding: EdgeInsets.fromLTRB(25, 0, 25, 10),
+                        padding: .fromLTRB(25, 0, 25, 10),
                         child: Text("试试扫码、手机号登录，或选择"),
                       ),
                       ListTile(
@@ -369,9 +356,7 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                       ),
                       ListTile(
-                        title: const Text(
-                          '找回密码（电脑版）',
-                        ),
+                        title: const Text('找回密码（电脑版）'),
                         leading: const Icon(Icons.desktop_windows_outlined),
                         subtitle: const Text(
                           'https://passport.bilibili.com/pc/passport/findPassword',

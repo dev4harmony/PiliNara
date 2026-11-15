@@ -96,6 +96,9 @@ class DetailItem extends StatelessWidget {
     final theme = Theme.of(context);
     final outline = theme.colorScheme.outline;
     final cid = entry.source?.cid ?? entry.pageData?.cid;
+    final canActInPlace = entry.isCompleted || onDelete != null;
+    // 本地长按菜单（删除/更新弹幕/分享）需要它；上游 2.6.2 已把长按菜单
+    // 抽走并删掉该局部变量，合并时被连带丢掉，这里补回。
     final canDel = entry.isCompleted;
     final enableMultiSelect = controller.enableMultiSelect.value;
     void onLongPress() {
@@ -157,7 +160,7 @@ class DetailItem extends StatelessWidget {
       child: InkWell(
         onTap: enableTap
             ? () async {
-                if (!canDel) {
+                if (!canActInPlace) {
                   Get.to(const DownloadingPage());
                   return;
                 }
@@ -189,7 +192,7 @@ class DetailItem extends StatelessWidget {
                       downloadNext: false,
                     );
                   } else {
-                    downloadService.startDownload(entry);
+                    downloadService.queueDownload(entry);
                   }
                 }
               }
@@ -254,12 +257,7 @@ class DetailItem extends StatelessWidget {
                       },
                     ),
                   ),
-                  PBadge(
-                    text: entry.qualityPithyDescription,
-                    right: 6.0,
-                    top: 6.0,
-                    type: PBadgeType.gray,
-                  ),
+                  entry.qaBadge,
                   if (progress != null)
                     ListenableBuilder(
                       listenable: progress!,
@@ -618,6 +616,15 @@ class DetailItem extends StatelessWidget {
                         entry: entry,
                         isUpdate: true,
                       );
+                      SmartDialog.showToast(res ? '更新成功' : '更新失败');
+                    },
+                  ),
+                if (canDel && entry.isCompleted)
+                  CustomPopupMenuItem<void>(
+                    height: 38,
+                    child: const Text('更新字幕、分段信息', style: TextStyle(fontSize: 13)),
+                    onTap: () async {
+                      final res = await downloadService.updatePlayInfo(entry);
                       SmartDialog.showToast(res ? '更新成功' : '更新失败');
                     },
                   ),

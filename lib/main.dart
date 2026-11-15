@@ -25,7 +25,7 @@ import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/services/route_stack_observer.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
-import 'package:PiliPlus/utils/calc_window_position.dart';
+import 'package:PiliPlus/utils/desktop/calc_window_position.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/core_palettes_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
@@ -43,7 +43,6 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
-import 'package:audio_service_mpris/audio_service_mpris.dart';
 import 'package:catcher_2/catcher_2.dart';
 import 'package:collection/collection.dart';
 import 'package:dynamic_color/dynamic_color.dart' show DynamicColorPlugin;
@@ -57,6 +56,7 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi show Size, Rectangle;
 import 'package:os_type/os_type.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -163,17 +163,7 @@ void main() async {
       );
     }
     await setupServiceLocator();
-  } else if (Platform.isMacOS) {
-    await setupServiceLocator();
-  } else if (Platform.isLinux) {
-    AudioServiceMpris.init(
-      identity: Constants.appName,
-      canControl: true,
-      canPlay: true,
-      canPause: true,
-      canGoNext: true,
-      canGoPrevious: true,
-    );
+  } else if (Platform.isMacOS || Platform.isLinux) {
     await setupServiceLocator();
   }
 
@@ -228,27 +218,11 @@ void main() async {
     } else {
       ScreenBrightnessPlatform.instance.setAutoReset(false);
     }
-  } else if (PlatformUtils.isDesktop && !OS.isHarmony) {
-    await windowManager.ensureInitialized();
-
-    final windowOptions = WindowOptions(
-      minimumSize: const Size(400, 720),
-      skipTaskbar: false,
-      titleBarStyle: Pref.showWindowTitleBar
-          ? TitleBarStyle.normal
-          : TitleBarStyle.hidden,
-      title: Constants.appName,
-    );
-    windowManager.waitUntilReadyToShow(windowOptions, () async {
-      final windowSize = Pref.windowSize;
-      await windowManager.setBounds(
-        await calcWindowPosition(windowSize) & windowSize,
-      );
-      if (Pref.isWindowMaximized) await windowManager.maximize();
-      await windowManager.show();
-      await windowManager.focus();
-    });
   }
+  // 桌面窗口的创建/定位已统一移到下方的 nativeapi 段（与上游 2.6.2 一致）：
+  // WindowManager.instance.getCurrent() + calcWindowBounds() 一次性设置
+  // bounds/minimumSize/titleBarStyle，不再有 windowManager.ensureInitialized()
+  // 与 waitUntilReadyToShow 两段式初始化。
 
   if (Pref.dynamicColor) {
     await MyApp.initPlatformState();
@@ -295,6 +269,37 @@ void main() async {
       // 个会话的「已隐藏」，Dart 侧状态已归零，需主动下发一次让两边收敛
       SystemBars.resync(hidden: !showSystemBar_);
     });
+  }
+
+  if (PlatformUtils.isDesktop) {
+    final window = WindowManager.instance.getCurrent();
+    if (window != null) {
+      final showTitleBar = Pref.showWindowTitleBar;
+      // macOS 隐藏标题栏时改用 contentUnderTitleBar，保持窗口可拖动
+      final useContentUnderTitleBar = Platform.isMacOS && !showTitleBar;
+      final (nativeapi.Size minSize, nativeapi.Rectangle bounds) =
+          calcWindowBounds();
+      window
+        ..titleBarStyle = useContentUnderTitleBar || showTitleBar
+            ? .normal
+            : .hidden
+        ..isWindowControlButtonsVisible = true
+        ..bounds = bounds
+        ..minimumSize = minSize
+        ..isVisibleInTaskbar = true
+        ..title = Constants.appName;
+      if (useContentUnderTitleBar) window.setContentUnderTitleBar(true);
+      if (Pref.isWindowMaximized) window.maximize();
+      void show([_]) => window
+        ..focus()
+        ..show();
+      switch (WidgetsBinding.instance.schedulerPhase) {
+        case .idle || .postFrameCallbacks:
+          WidgetsBinding.instance.scheduleFrameCallback(show);
+        case .transientCallbacks || .midFrameMicrotasks || .persistentCallbacks:
+          WidgetsBinding.instance.addPostFrameCallback(show);
+      }
+    }
   }
 }
 

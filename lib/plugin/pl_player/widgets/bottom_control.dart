@@ -14,6 +14,7 @@ class BottomControl extends StatelessWidget {
     super.key,
     required this.maxWidth,
     required this.isFullScreen,
+    required this.animCtr,
     required this.controller,
     required this.buildBottomControl,
     required this.videoDetailController,
@@ -22,6 +23,7 @@ class BottomControl extends StatelessWidget {
 
   final double maxWidth;
   final bool isFullScreen;
+  final AnimationController animCtr;
   final PlPlayerController controller;
   final ValueGetter<Widget> buildBottomControl;
   final VideoDetailController videoDetailController;
@@ -46,7 +48,17 @@ class BottomControl extends StatelessWidget {
     controller
       ..position.value = milliseconds ~/ 1000
       ..onSeekEnd()
-      ..seekTo(Duration(milliseconds: milliseconds), isSeek: false);
+      ..seekTo(Duration(milliseconds: milliseconds));
+  }
+
+  void _onHoverStart(ThumbDragDetails details) {
+    if (animCtr.isAnimating) return;
+    controller.onDesktopProgressHoverStart(details.timeStamp);
+  }
+
+  void _onHoverUpdate(ThumbDragDetails details) {
+    if (animCtr.isAnimating) return;
+    controller.onDesktopProgressHoverUpdate(details.timeStamp);
   }
 
   @override
@@ -93,16 +105,10 @@ class BottomControl extends StatelessWidget {
                         onDragUpdate: onDragUpdate,
                         onSeek: onSeek,
                         onHoverStart: isDesktop
-                            ? (details) =>
-                                  controller.onDesktopProgressHoverStart(
-                                    details.timeStamp,
-                                  )
+                            ? _onHoverStart
                             : null,
                         onHoverUpdate: isDesktop
-                            ? (details) =>
-                                  controller.onDesktopProgressHoverUpdate(
-                                    details.timeStamp,
-                                  )
+                            ? _onHoverUpdate
                             : null,
                         onHoverEnd: isDesktop
                             ? controller.onDesktopProgressHoverEnd
@@ -153,7 +159,7 @@ class BottomControl extends StatelessWidget {
                               context,
                             ).textTheme.bodyMedium?.fontWeight,
                             onSeek: (position) =>
-                                controller.seekTo(position, isSeek: false),
+                                controller.seekTo(position),
                           ),
                         )
                       else

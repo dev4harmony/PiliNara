@@ -95,7 +95,7 @@ class _DanmakuBlockPageState extends State<DanmakuBlockPage> {
     );
   }
 
-  Widget tabViewBuilder(final int tabIndex, List<SimpleRule> list) {
+  Widget tabViewBuilder(int tabIndex, List<SimpleRule> list) {
     if (list.isEmpty) {
       return scrollableError;
     }

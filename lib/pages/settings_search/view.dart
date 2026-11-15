@@ -4,6 +4,7 @@ import 'package:PiliPlus/common/widgets/view_insets_safe_area.dart';
 import 'package:PiliPlus/common/widgets/view_sliver_safe_area.dart';
 import 'package:PiliPlus/pages/search/controller.dart' show DebounceStreamState;
 import 'package:PiliPlus/pages/search/widgets/search_text.dart';
+import 'package:PiliPlus/pages/setting/models/dm_settings.dart';
 import 'package:PiliPlus/pages/setting/models/dynamics_settings.dart';
 import 'package:PiliPlus/pages/setting/models/experimental_settings.dart';
 import 'package:PiliPlus/pages/setting/models/extra_settings.dart';
@@ -11,6 +12,7 @@ import 'package:PiliPlus/pages/setting/models/model.dart';
 import 'package:PiliPlus/pages/setting/models/play_settings.dart';
 import 'package:PiliPlus/pages/setting/models/privacy_settings.dart';
 import 'package:PiliPlus/pages/setting/models/recommend_settings.dart';
+import 'package:PiliPlus/pages/setting/models/reply_settings.dart';
 import 'package:PiliPlus/pages/setting/models/style_settings.dart';
 import 'package:PiliPlus/pages/setting/models/video_settings.dart';
 import 'package:PiliPlus/utils/grid.dart';
@@ -42,10 +44,14 @@ class _SettingsSearchPageState
   );
   late final _settings = [
     ...extraSettings,
+    ...dmSettings,
+    ...replySettings,
     ...privacySettings,
     ...recommendSettings,
     ...dynamicsSettings,
     ...videoSettings,
+    ...dmSettings,
+    ...replySettings,
     ...playSettings,
     ...styleSettings,
     ...experimentalSettings,

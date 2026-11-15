@@ -1,6 +1,9 @@
 import 'dart:io';
 
 import 'package:PiliPlus/common/assets.dart';
+import 'package:PiliPlus/utils/desktop/tray_controller.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi;
+import 'package:PiliPlus/utils/desktop/window_controller.dart';
 import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/floating_navigation_bar.dart';
@@ -27,9 +30,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:os_type/os_type.dart';
-import 'package:tray_manager/tray_manager.dart';
 import 'package:win32/win32.dart' as kernel32;
-import 'package:window_manager/window_manager.dart';
 
 class MainApp extends StatefulWidget {
   const MainApp({super.key});
@@ -42,9 +43,7 @@ class _MainAppState extends PopScopeState<MainApp>
     with
         RouteAware,
         RouteAwareMixin,
-        WidgetsBindingObserver,
-        WindowListener,
-        TrayListener {
+        WidgetsBindingObserver {
   final _mainController = Get.put(MainController());
   late final _setting = GStorage.setting;
   late EdgeInsets _padding;
@@ -88,13 +87,8 @@ class _MainAppState extends PopScopeState<MainApp>
       HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     }
     if (PlatformUtils.isDesktop) {
-      windowManager
-        ..addListener(this)
-        ..setPreventClose(true);
-      if (_mainController.showTrayIcon) {
-        trayManager.addListener(this);
-        _handleTray();
-      }
+      WindowController.instance.init();
+      TrayController.instance.init();
     }
     if (!Platform.isMacOS) {
       PiliScheme.init();
@@ -112,7 +106,9 @@ class _MainAppState extends PopScopeState<MainApp>
     if (PlatformUtils.isDesktop) {
       if (_brightness != brightness) {
         _brightness = brightness;
-        windowManager.setBrightness(brightness);
+        nativeapi.Application.instance.setBrightness(
+          brightness == .dark ? .dark : .light,
+        );
       }
     }
     if (!_mainController.useSideBar) {
@@ -169,8 +165,8 @@ class _MainAppState extends PopScopeState<MainApp>
       HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     }
     if (PlatformUtils.isDesktop) {
-      trayManager.removeListener(this);
-      windowManager.removeListener(this);
+      WindowController.instance.dispose();
+      TrayController.instance.dispose();
     }
     removeObserverMobile(this);
     PiliScheme.listener?.cancel();
@@ -191,132 +187,6 @@ class _MainAppState extends PopScopeState<MainApp>
     if (Platform.isAndroid) {
       PiliAndroidHelper.back();
     }
-  }
-
-  @override
-  void onWindowUnmaximize() {
-    _setting.put(SettingBoxKey.isWindowMaximized, false);
-  }
-
-  @override
-  Future<void> onWindowMoved() async {
-    if (PlPlayerController.instance?.isDesktopPip ?? false) {
-      return;
-    }
-    final Offset offset = await windowManager.getPosition();
-    _setting.put(SettingBoxKey.windowPosition, [offset.dx, offset.dy]);
-  }
-
-  @override
-  Future<void> onWindowResized() async {
-    if (PlPlayerController.instance?.isDesktopPip ?? false) {
-      return;
-    }
-    final Rect bounds = await windowManager.getBounds();
-    _setting.putAll({
-      SettingBoxKey.windowSize: [bounds.width, bounds.height],
-      SettingBoxKey.windowPosition: [bounds.left, bounds.top],
-    });
-  }
-
-  @override
-  void onWindowClose() {
-    if (_mainController.showTrayIcon && _mainController.minimizeOnExit) {
-      windowManager.hide();
-      _onHideWindow();
-    } else {
-      _onClose();
-    }
-  }
-
-  Future<void> _onClose() async {
-    await GStorage.compact();
-    await GStorage.close();
-    await trayManager.destroy();
-    if (Platform.isWindows) {
-      // flutter_inappwebview
-      // 6.2.0-beta.2+ https://github.com/pichillilorenzo/flutter_inappwebview/issues/2482
-      // 6.1.5 https://github.com/pichillilorenzo/flutter_inappwebview/issues/2512#issuecomment-3031039587
-      final hProcess = kernel32.GetCurrentProcess();
-      kernel32.TerminateProcess(hProcess, 0);
-    } else {
-      exit(0);
-    }
-  }
-
-  @override
-  void onWindowMinimize() {
-    _onHideWindow();
-  }
-
-  @override
-  void onWindowRestore() {
-    _onShowWindow();
-  }
-
-  void _onHideWindow() {
-    if (_mainController.pauseOnMinimize) {
-      if (PlPlayerController.instance case final player?) {
-        if (_mainController.isPlaying = player.playerStatus.isPlaying) {
-          player.pause();
-        }
-      } else {
-        _mainController.isPlaying = false;
-      }
-    }
-  }
-
-  void _onShowWindow() {
-    if (_mainController.pauseOnMinimize && _mainController.isPlaying) {
-      PlPlayerController.instance?.play();
-    }
-  }
-
-  @override
-  Future<void> onTrayIconMouseDown() async {
-    if (await windowManager.isVisible()) {
-      _onHideWindow();
-      windowManager.hide();
-    } else {
-      _onShowWindow();
-      windowManager.show();
-    }
-  }
-
-  @override
-  Future<void> onTrayIconRightMouseDown() async {
-    // ignore: deprecated_member_use
-    trayManager.popUpContextMenu(bringAppToFront: true);
-  }
-
-  @override
-  void onTrayMenuItemClick(MenuItem menuItem) {
-    switch (menuItem.key) {
-      case 'show':
-        windowManager.show();
-      case 'exit':
-        _onClose();
-    }
-  }
-
-  Future<void> _handleTray() async {
-    if (Platform.isWindows) {
-      await trayManager.setIcon(Assets.logoIco);
-    } else {
-      await trayManager.setIcon(Assets.logoLarge);
-    }
-    if (!Platform.isLinux) {
-      await trayManager.setToolTip(Constants.appName);
-    }
-
-    Menu trayMenu = Menu(
-      items: [
-        MenuItem(key: 'show', label: '显示窗口'),
-        MenuItem.separator(),
-        MenuItem(key: 'exit', label: '退出 ${Constants.appName}'),
-      ],
-    );
-    await trayManager.setContextMenu(trayMenu);
   }
 
   @override
@@ -437,10 +307,14 @@ class _MainAppState extends PopScopeState<MainApp>
           child: MediaQuery.removePadding(
             context: context,
             removeRight: true,
-            child: DrawerTheme(
-              data: DrawerThemeData(width: 130 + _padding.left),
-              child: Obx(
-                () => NavigationDrawer(
+            child: Obx(
+              () => DrawerTheme(
+                data: DrawerThemeData(
+                  width:
+                      (_mainController.hideSideBarLabel ? 80 : 130) +
+                      _padding.left,
+                ),
+                child: NavigationDrawer(
                   /// apply `lib/scripts/navigation_drawer.patch`
                   flex: 5,
                   backgroundColor: Colors.transparent,
@@ -448,13 +322,22 @@ class _MainAppState extends PopScopeState<MainApp>
                   selectedIndex: _mainController.selectedIndex.value,
                   header: Expanded(flex: 4, child: userAndSearchVertical()),
                   tilePadding: const .symmetric(vertical: 5, horizontal: 12),
-                  indicatorShape: const RoundedRectangleBorder(
-                    borderRadius: .all(.circular(16)),
-                  ),
+                  indicatorShape: _mainController.hideSideBarLabel
+                      ? const RoundedRectangleBorder(
+                          borderRadius: .all(.circular(12)),
+                        )
+                      : const RoundedRectangleBorder(
+                          borderRadius: .all(.circular(16)),
+                        ),
                   children: _mainController.navigationBars
                       .map(
                         (e) => NavigationDrawerDestination(
-                          label: Text(e.label),
+                          label: _mainController.hideSideBarLabel
+                              ? Semantics(
+                                  label: e.label,
+                                  child: const SizedBox.shrink(),
+                                )
+                              : Text(e.label),
                           icon: _buildIcon(type: e),
                           selectedIcon: _buildIcon(
                             type: e,
@@ -472,7 +355,7 @@ class _MainAppState extends PopScopeState<MainApp>
       return Obx(
         () => NavigationRail(
           groupAlignment: 0.5,
-          labelType: .selected,
+          labelType: _mainController.hideSideBarLabel ? .none : .selected,
           leading: userAndSearchVertical(),
           backgroundColor: Colors.transparent,
           onDestinationSelected: _mainController.setIndex,

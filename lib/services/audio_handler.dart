@@ -11,6 +11,7 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/pages/audio/controller.dart';
 import 'package:PiliPlus/pages/common/common_intro_controller.dart';
+import 'package:PiliPlus/pages/live_room/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/local/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
@@ -23,12 +24,26 @@ import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_service_mpris/audio_service_mpris.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
 
 Future<VideoPlayerServiceHandler> initAudioService() {
+  if (Platform.isLinux) {
+    AudioServiceMpris.init(
+      dBusName: 'com.example.pilinara.audio',
+      identity: Constants.appName,
+      desktopEntry: 'com.example.pilinara',
+      canGoNext: true,
+      canGoPrevious: true,
+      canPlay: true,
+      canPause: true,
+      canControl: true,
+    );
+  }
   return AudioService.init(
     builder: VideoPlayerServiceHandler.new,
     config: const AudioServiceConfig(
@@ -53,7 +68,32 @@ typedef _StatusConfig = (
 
 class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
   VideoPlayerServiceHandler({bool? enableBackgroundPlay})
-    : enableBackgroundPlay = enableBackgroundPlay ?? Pref.enableBackgroundPlay;
+    : enableBackgroundPlay = enableBackgroundPlay ?? Pref.enableBackgroundPlay {
+    // Android 14 dispatches volume keys from the activity straight to the
+    // session without checking canHandleVolumeKey(), so a FIXED remote
+    // session swallows them there. Only verified to fall back on Android 16.
+    //
+    // 上游用 AndroidHelper.manufacturer() / DeviceUtils.sdkInt（jnigen 绑定，
+    // 依赖 jni）；鸿蒙分支摘掉了 jni，替身里 manufacturer() 不存在、sdkInt()
+    // 恒为 0，改由 device_info_plus 取同一组字段（见 AGENT.md §6.3）。
+    if (Platform.isAndroid) {
+      unawaited(() async {
+        try {
+          final info = await DeviceInfoPlugin().androidInfo;
+          if (info.version.sdkInt >= 36 &&
+              info.manufacturer.toLowerCase() == 'vivo') {
+            androidPlaybackInfo.add(
+              RemoteAndroidPlaybackInfo(
+                volumeControlType: .fixed,
+                maxVolume: 100,
+                volume: 50,
+              ),
+            );
+          }
+        } catch (_) {}
+      }());
+    }
+  }
 
   factory VideoPlayerServiceHandler.local() =>
       VideoPlayerServiceHandler(enableBackgroundPlay: false);
@@ -67,6 +107,7 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
   /// 实况窗/播控中心切换循环模式时回调给当前播放页
   Future<void> Function(PlayRepeat repeat)? onRepeatModeChanged;
 
+  bool Function()? isPlaying;
   Future<void>? Function()? onPlay;
   Future<void>? Function()? onPause;
   Future<void>? Function(Duration position)? onSeek;
@@ -75,6 +116,7 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
   String? currentHeroTag;
 
   void _clearCallbacks() {
+    isPlaying = null;
     onPlay = null;
     onPause = null;
     onSeek = null;
@@ -122,12 +164,16 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> seek(Duration position) {
     return onSeek?.call(position) ??
-        PlPlayerController.seekToIfExists(position, isSeek: false) ??
+        PlPlayerController.seekToIfExists(position) ??
         Future.syncValue(null);
   }
 
   @override
   Future<void> skipToNext() async {
+    final playOwner = PlPlayerController.playOwner;
+    if (playOwner != null && playOwner.type == null) {
+      return;
+    }
     if (onSkipToNext != null) {
       onSkipToNext?.call();
       return;
@@ -159,6 +205,10 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> skipToPrevious() async {
+    final playOwner = PlPlayerController.playOwner;
+    if (playOwner != null && playOwner.type == null) {
+      return;
+    }
     if (onSkipToPrevious != null) {
       onSkipToPrevious?.call();
       return;
@@ -189,22 +239,45 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
 
   CommonIntroController? _findIntroController() {
     final playOwner = PlPlayerController.playOwner;
-    if (playOwner != null) {
-      final tag = playOwner.tag;
-      try {
-        return switch (playOwner.type) {
-          UgcIntroController => Get.find<UgcIntroController>(tag: tag),
-          PgcIntroController => Get.find<PgcIntroController>(tag: tag),
-          LocalIntroController => Get.find<LocalIntroController>(tag: tag),
-          _ => throw UnimplementedError(playOwner.type.toString()),
-        };
-      } catch (_) {
-        if (kDebugMode) rethrow;
-      }
+    if (playOwner == null) {
+      return null;
+    }
+
+    final type = playOwner.type;
+    if (type == null) {
+      return null;
+    }
+
+    final tag = playOwner.tag;
+    try {
+      return switch (type) {
+        UgcIntroController => Get.find<UgcIntroController>(tag: tag),
+        PgcIntroController => Get.find<PgcIntroController>(tag: tag),
+        LocalIntroController => Get.find<LocalIntroController>(tag: tag),
+        _ => throw UnimplementedError(type.toString()),
+      };
+    } catch (_) {
+      if (kDebugMode) rethrow;
     }
     return null;
   }
 
+
+  @override
+  Future<dynamic> customAction(String name, [Map<String, dynamic>? extras]) {
+    try {
+      switch (name) {
+        case 'ACTION_DM':
+          final tag = PlPlayerController.playOwner!.tag;
+          Get.find<LiveRoomController>(tag: tag).toggleDanmaku();
+        case 'ACTION_REFRESH':
+          final tag = PlPlayerController.playOwner!.tag;
+          Get.find<LiveRoomController>(tag: tag).queryLiveUrl();
+        default:
+      }
+    } catch (_) {}
+    return Future.syncValue(null);
+  }
 
   void setMediaItem(MediaItem newMediaItem) {
     if (!enableBackgroundPlay) return;
@@ -302,24 +375,13 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
     final hasEpisodes = _hasEpisodes();
 
     final controls = <MediaControl>[
+      if (isLive) _refresh,
       if (!isLive && hasEpisodes) MediaControl.skipToPrevious,
-      if (!isLive)
-        MediaControl.rewind.copyWith(
-          androidIcon: 'drawable/ic_player_rewind_10s',
-        ),
-      if (playing)
-        MediaControl.pause.copyWith(
-          androidIcon: 'drawable/ic_player_pause',
-        )
-      else
-        MediaControl.play.copyWith(
-          androidIcon: 'drawable/ic_player_play',
-        ),
-      if (!isLive)
-        MediaControl.fastForward.copyWith(
-          androidIcon: 'drawable/ic_player_fast_forward_10s',
-        ),
+      if (!isLive) _rewind,
+      if (playing) _pause else _play,
+      if (!isLive) _fastForward,
       if (!isLive && hasEpisodes) MediaControl.skipToNext,
+      if (isLive) _dm,
     ];
 
     int playPauseIndex = controls.indexWhere(
@@ -560,3 +622,41 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
     _clearCurrentSession();
   }
 }
+
+const _refresh = MediaControl(
+  androidIcon: 'drawable/ic_player_refresh',
+  label: 'Refresh',
+  action: .custom,
+  customAction: CustomMediaAction(name: 'ACTION_REFRESH'),
+);
+
+const _dm = MediaControl(
+  androidIcon: 'drawable/ic_state_danmaku',
+  label: 'Danmaku',
+  action: .custom,
+  customAction: CustomMediaAction(name: 'ACTION_DM'),
+);
+
+const _play = MediaControl(
+  androidIcon: 'drawable/ic_player_play',
+  label: 'Play',
+  action: .play,
+);
+
+const _pause = MediaControl(
+  androidIcon: 'drawable/ic_player_pause',
+  label: 'Pause',
+  action: .pause,
+);
+
+const _rewind = MediaControl(
+  androidIcon: 'drawable/ic_player_rewind_10s',
+  label: 'Rewind',
+  action: .rewind,
+);
+
+const _fastForward = MediaControl(
+  androidIcon: 'drawable/ic_player_fast_forward_10s',
+  label: 'Fast Forward',
+  action: .fastForward,
+);
