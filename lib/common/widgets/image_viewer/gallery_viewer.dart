@@ -112,10 +112,17 @@ class _GalleryViewerState extends State<GalleryViewer>
 
   Future<void> _initPlayer() async {
     assert(_player == null);
-    final player = Player();
-    _videoController = VideoController(player);
+    // Player.create 返回时底层初始化已完成（上游 native 分支 API，fork 已对齐），
+    // 避免 livePhoto 在构造后立刻 open 撞上未就绪的 mpv 实例。
+    final player = await Player.create();
     if (!mounted) {
-      player.dispose();
+      await player.dispose();
+      _videoController = null;
+      return;
+    }
+    _videoController = await VideoController.create(player);
+    if (!mounted) {
+      await player.dispose();
       _videoController = null;
       return;
     }
