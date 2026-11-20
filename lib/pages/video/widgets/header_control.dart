@@ -427,8 +427,9 @@ class HeaderControlState extends State<HeaderControl>
 
   @override
   bool get isPortrait => widget.isPortrait;
+  // 不缓存：鸿蒙上横屏适配由设备形态/内外屏自动判定，折叠切换后会变。
   @override
-  late final horizontalScreen = videoDetailCtr.horizontalScreen;
+  bool get horizontalScreen => videoDetailCtr.horizontalScreen;
 
   Box setting = GStorage.setting;
 

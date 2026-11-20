@@ -48,6 +48,7 @@ import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:os_type/os_type.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import 'package:material_ui/material_ui.dart' hide StatefulBuilder;
 import 'package:path/path.dart' as path;
@@ -70,14 +71,17 @@ List<SettingsModel> get styleSettings => [
     ),
   ],
   if (Platform.isLinux) _useSSDModel(),
-  SwitchModel(
-    title: '横屏适配',
-    subtitle: '启用横屏布局与逻辑，平板、折叠屏等可开启；建议全屏方向设为【不改变当前方向】',
-    leading: const Icon(Icons.phonelink_outlined),
-    setKey: SettingBoxKey.horizontalScreen,
-    defaultVal: Pref.horizontalScreen,
-    onChanged: _onHorizontalScreenChanged,
-  ),
+  // 鸿蒙：横屏适配按设备形态自动判定（直板机/小折叠/外屏关闭，折叠内屏与
+  // 平板/2in1 开启），不再提供用户开关；其它平台保持原开关。
+  if (!OS.isHarmony)
+    SwitchModel(
+      title: '横屏适配',
+      subtitle: '启用横屏布局与逻辑，平板、折叠屏等可开启；建议全屏方向设为【不改变当前方向】',
+      leading: const Icon(Icons.phonelink_outlined),
+      setKey: SettingBoxKey.horizontalScreen,
+      defaultVal: Pref.horizontalScreen,
+      onChanged: _onHorizontalScreenChanged,
+    ),
   const SwitchModel(
     title: '改用侧边栏',
     subtitle: '开启后底栏与顶栏被替换，且相关设置失效',
@@ -1009,13 +1013,15 @@ Widget _themeTrailing(ThemeData theme) {
 }
 
 void _onHorizontalScreenChanged(bool value) {
+  // FAB 横屏门控实时读取 Pref.horizontalScreen，切换后需触发一次重算
+  FabSideGate.landscapeAdapt = value;
+  // 鸿蒙的方向由系统接管，这里只更新布局开关，不再主动设方向。
+  if (OS.isHarmony) return;
   if (value) {
     fullMode();
   } else {
     portraitUpMode();
   }
-  // 横屏锁定鸿蒙智感握姿
-  FabSideGate.landscapeAdapt = value;
 }
 
 Future<void> _showMineTabsDialog(
