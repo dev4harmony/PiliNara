@@ -332,7 +332,10 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     _isVertical = value;
     // 竖屏视频（含竖屏直播流）：同步给方向策略，在手机竖屏播放形态设备的
     // 播放页整页锁竖向（非全屏与全屏一致），避免转动设备时窗口先转再被拉回。
-    if (OS.isHarmony) OrientationPolicy.setVideoVertical(value);
+    if (OS.isHarmony) {
+      OrientationPolicy.setPlayerRotationLocked(false);
+      OrientationPolicy.setVideoVertical(value);
+    }
   }
 
   /// 弹幕开关
@@ -2661,6 +2664,10 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       showControls.refresh();
     }
     controls = !val;
+    // 鸿蒙：方向由 OrientationPolicy 唯一决策，锁定控件作为策略输入同步。
+    if (OS.isHarmony && lockFsRotation && isFullScreen.value && !isVertical) {
+      OrientationPolicy.setPlayerRotationLocked(val);
+    }
   }
 
   void _setFullScreen(bool val) {

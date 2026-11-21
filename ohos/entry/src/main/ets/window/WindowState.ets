@@ -1,4 +1,5 @@
 import { BusinessError } from "@kit.BasicServicesKit";
+import display from "@ohos.display";
 import window from "@ohos.window";
 import { TITLE_BAR_HEIGHT, WindowChromeController, WindowChromeState } from "./WindowChrome";
 import { SystemBarsController } from "./SystemBars";
@@ -200,11 +201,39 @@ export class WindowState {
       case 'landscapeOnly':
         orientation = window.Orientation.AUTO_ROTATION_LANDSCAPE;
         break;
+      case 'freezeCurrent': {
+        // 冻结当前方向：屏幕方向 → 窗口方向数字 → 固定 Orientation。
+        orientation = this.freezeCurrentOrientation();
+        break;
+      }
       default:
         orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
         break;
     }
     await this.win.setPreferredOrientation(orientation);
+  }
+
+  /** 把屏幕当前方向换算成固定 Orientation（API<23 时按窗口宽高降级）。 */
+  private freezeCurrentOrientation(): window.Orientation {
+    try {
+      const displayOrientation = display.getDefaultDisplaySync().orientation;
+      const num = this.win!.convertOrientationAndRotation(
+        window.RotationInfoType.DISPLAY_ORIENTATION,
+        window.RotationInfoType.WINDOW_ORIENTATION,
+        displayOrientation
+      );
+      switch (num) {
+        case 1: return window.Orientation.LANDSCAPE_INVERTED;
+        case 2: return window.Orientation.PORTRAIT_INVERTED;
+        case 3: return window.Orientation.LANDSCAPE;
+        default: return window.Orientation.PORTRAIT;
+      }
+    } catch (e) {
+      const rect = this.win!.getWindowProperties().windowRect;
+      return rect.width > rect.height
+        ? window.Orientation.LANDSCAPE
+        : window.Orientation.PORTRAIT;
+    }
   }
 
   async setMiniWindowLandscape(landscape: boolean): Promise<void> {

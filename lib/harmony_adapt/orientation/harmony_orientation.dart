@@ -33,7 +33,12 @@ enum HarmonyOrientationPolicy {
   /// （受控制中心旋转锁定控制）。用于手机竖屏播放形态设备的横屏视频全屏：
   /// - 旋转锁关闭：转到竖屏时窗口跟着转回竖屏 → 触发自动退出全屏；
   /// - 旋转锁打开：不再跟随传感器，保持横屏，只能点按钮退出。
-  userLandscape('userLandscape');
+  userLandscape('userLandscape'),
+
+  /// 冻结窗口当前方向：原生侧把屏幕当前方向换算成固定方向下发，不跟随
+  /// 传感器、不受旋转锁定控制。用于播放器锁定控件开启且设置了
+  /// 「锁定后禁止重力感应旋转」的横屏视频全屏。
+  freezeCurrent('freezeCurrent');
 
   const HarmonyOrientationPolicy(this.value);
 

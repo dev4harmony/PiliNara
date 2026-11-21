@@ -33,6 +33,7 @@ import 'package:os_type/os_type.dart';
 /// | portraitPlayerForm | 播放页 | 横屏视频 | 是（锁关，窗口已是横屏） | [followSystem] |
 /// | portraitPlayerForm | 播放页 | 横屏视频 | 是（锁关，窗口是竖屏） | [userLandscape] |
 /// | portraitPlayerForm | 播放页 | 横屏视频 | 是（锁开） | [landscapeOnly] |
+/// | portraitPlayerForm | 播放页 | 横屏视频 | 是（播放器锁定 + lockFsRotation） | [freezeCurrent] |
 ///
 /// 竖屏视频锁竖向对齐 B 站：不论旋转锁定与设备方向，非全屏与全屏都保持竖向。
 /// 该策略在**进入播放页、视频方向已知时**就生效（由播放器尺寸回调同步），
@@ -75,6 +76,9 @@ abstract final class OrientationPolicy {
   /// 转竖屏退出）。初始化与进入全屏时刷新。
   static bool _autoRotateEnabled = true;
 
+  /// 播放器锁定控件开启且「锁定后禁止重力感应旋转」生效（仅横屏视频全屏）。
+  static bool _rotationLockedByPlayer = false;
+
   static HarmonyOrientationPolicy? _applied;
   static bool _initialized = false;
 
@@ -95,6 +99,12 @@ abstract final class OrientationPolicy {
     // 横置手机进入播放页因此会先正常落到竖屏非全屏；退出全屏也会先转回竖屏，
     // 避免窗口保持横屏后被「窗口横屏自动进全屏」重新拉回全屏。
     if (!_fullScreen) return .userPortrait;
+    // 锁定控件开启且设置了「锁定后禁止重力感应旋转」：冻结当前方向。
+    if (_rotationLockedByPlayer &&
+        !WindowFacts.isWindowMode &&
+        !WindowFacts.isFreeWindowMode) {
+      return .freezeCurrent;
+    }
     // 横屏视频全屏：
     // - 旋转锁定关闭：临时转横后恢复四方向跟随（180° 翻转、转回竖屏自动退全屏）
     // - 旋转锁定打开：仅横向两方向跟随（180° 翻转可用，但不会转竖屏退出，
@@ -194,10 +204,20 @@ abstract final class OrientationPolicy {
     _sync();
   }
 
+  /// 播放器锁定控件状态变化（仅横屏视频全屏时锁定生效）。
+  static void setPlayerRotationLocked(bool value) {
+    if (_rotationLockedByPlayer == value) return;
+    _rotationLockedByPlayer = value;
+    _sync();
+  }
+
   /// 播放器进出全屏；返回策略下发完成的 Future，供进入全屏后等待转向。
   static Future<void> setFullScreen(bool value) async {
     if (_fullScreen == value) return;
     _fullScreen = value;
+    if (!value && _rotationLockedByPlayer) {
+      _rotationLockedByPlayer = false;
+    }
     // 只有「手机竖屏播放形态设备 + 横屏视频全屏 + 非受限窗口」需要按旋转锁定
     // 状态选策略；其它情况（平板/2in1/横屏布局折叠内屏、竖屏视频、分屏/悬浮窗/
     // 自由多窗）保持原策略，不做额外读取。
