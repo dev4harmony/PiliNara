@@ -86,7 +86,9 @@ class _MainAppState extends PopScopeState<MainApp>
     if (Platform.isMacOS) {
       HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     }
-    if (PlatformUtils.isDesktop) {
+    // 鸿蒙 2in1/PC 下 isDesktop 为 true，但 nativeapi（WindowController /
+    // TrayController 的底座）无鸿蒙实现，见 packages/cnativeapi 的 shim。
+    if (PlatformUtils.isDesktop && !OS.isHarmony) {
       WindowController.instance.init();
       TrayController.instance.init();
     }
@@ -103,7 +105,7 @@ class _MainAppState extends PopScopeState<MainApp>
     final brightness = _colorScheme.brightness;
     NetworkImgLayer.reduce =
         NetworkImgLayer.reduceLuxColor != null && brightness.isDark;
-    if (PlatformUtils.isDesktop) {
+    if (PlatformUtils.isDesktop && !OS.isHarmony) {
       if (_brightness != brightness) {
         _brightness = brightness;
         nativeapi.Application.instance.setBrightness(
@@ -164,7 +166,7 @@ class _MainAppState extends PopScopeState<MainApp>
     if (Platform.isMacOS) {
       HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     }
-    if (PlatformUtils.isDesktop) {
+    if (PlatformUtils.isDesktop && !OS.isHarmony) {
       WindowController.instance.dispose();
       TrayController.instance.dispose();
     }

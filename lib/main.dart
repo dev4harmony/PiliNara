@@ -279,7 +279,12 @@ void main() async {
     });
   }
 
-  if (PlatformUtils.isDesktop) {
+  // 鸿蒙 2in1 / PC 形态下 PlatformUtils.isDesktop（os_type 的 isPCOS）为 true，
+  // 但 nativeapi 没有鸿蒙实现：cnativeapi 在 ohos 目标被 packages/cnativeapi
+  // 的 shim 短路，不产出 code asset，调用 native_window_manager_get_current
+  // 会直接抛 "Couldn't resolve native function"。鸿蒙的窗口域由
+  // WindowBridge.init()（见上方 OS.isHarmony 分支）统一接管，这里必须排除。
+  if (PlatformUtils.isDesktop && !OS.isHarmony) {
     final window = WindowManager.instance.getCurrent();
     if (window != null) {
       final showTitleBar = Pref.showWindowTitleBar;
