@@ -1,26 +1,17 @@
 part of 'package:PiliPlus/pages/dynamics/widgets/content_panel.dart';
 
 Widget dynTextMenuBuilder(
-  EditableTextState state,
+  SelectableRegionState state,
   String text,
   ModuleDynamicModel? moduleDynamic,
 ) {
-  final buttonItems = ensureSelectionMenuButtons(
-    state.contextMenuButtonItems,
-    selectedTextOf: () {
-      final value = state.textEditingValue;
-      final selection = value.selection;
-      if (!selection.isValid || selection.isCollapsed) return null;
-      return selection.textInside(value.text);
-    },
-    hideToolbar: state.hideToolbar,
-  )
+  final buttonItems = state.contextMenuButtonItems
     ..insertOrAdd(
       3,
       ContextMenuButtonItem(
         label: '文本',
         onPressed: () {
-          state.hideToolbar();
+          state.hideAndClear();
           _showTextDialog(text);
         },
       ),
@@ -30,57 +21,58 @@ Widget dynTextMenuBuilder(
       ContextMenuButtonItem(
         label: '表情',
         onPressed: () {
-          state.hideToolbar();
+          state.hideAndClear();
           _showEmoteDialog(moduleDynamic);
         },
       ),
     );
   _addDynFilterItem(buttonItems, state);
-  // 鸿蒙上用原生样式的工具栏；其它平台仍是 Material 菜单。
-  return buildEditableTextSelectionMenuWithItems(state, buttonItems);
+  state.addLaunchMenuIfNeeded(buttonItems, index: 5);
+  return AdaptiveTextSelectionToolbar.buttonItems(
+    buttonItems: buttonItems,
+    anchors: state.contextMenuAnchors,
+  );
 }
 
 void _addDynFilterItem(
   List<ContextMenuButtonItem> buttonItems,
-  EditableTextState state,
+  SelectableRegionState state,
 ) {
-  final value = state.textEditingValue;
-  final selection = value.selection;
-  if (!selection.isValid || selection.isCollapsed) return;
-  final selectedText = selection.textInside(value.text);
-  buttonItems.add(
-    ContextMenuButtonItem(
-      onPressed: () {
-        final escapedText = RegExp.escape(selectedText);
+  if (state.isUncollapsed) {
+    buttonItems.add(
+      ContextMenuButtonItem(
+        onPressed: () {
+          final escapedText = RegExp.escape(state.selectedText!);
 
-        showConfirmDialog(
-          context: Get.context!,
-          title: const Text('是否将以下内容加入动态过滤：'),
-          content: Text(
-            escapedText,
-            style: const TextStyle(
-              color: Colors.green,
-              fontWeight: .bold,
+          showConfirmDialog(
+            context: Get.context!,
+            title: const Text('是否将以下内容加入动态过滤：'),
+            content: Text(
+              escapedText,
+              style: const TextStyle(
+                color: Colors.green,
+                fontWeight: .bold,
+              ),
             ),
-          ),
-          onConfirm: () {
-            final currentStored = Pref.banWordForDyn;
-            final existingKeywords = Pref.parseBanWordItems(currentStored);
-            if (existingKeywords.contains(escapedText)) {
-              SmartDialog.showToast('该关键词已在过滤列表中');
-              return;
-            }
-            final newStored = [...existingKeywords, escapedText].join('\n');
-            GStorage.setting.put(SettingBoxKey.banWordForDyn, newStored);
-            DynamicsDataModel.banWordForDyn = Pref.compileBanWord(newStored);
-            DynamicsDataModel.enableFilter = true;
-            SmartDialog.showToast('已保存');
-          },
-        );
-      },
-      label: '加入过滤',
-    ),
-  );
+            onConfirm: () {
+              final currentStored = Pref.banWordForDyn;
+              final existingKeywords = Pref.parseBanWordItems(currentStored);
+              if (existingKeywords.contains(escapedText)) {
+                SmartDialog.showToast('该关键词已在过滤列表中');
+                return;
+              }
+              final newStored = [...existingKeywords, escapedText].join('\n');
+              GStorage.setting.put(SettingBoxKey.banWordForDyn, newStored);
+              DynamicsDataModel.banWordForDyn = Pref.compileBanWord(newStored);
+              DynamicsDataModel.enableFilter = true;
+              SmartDialog.showToast('已保存');
+            },
+          );
+        },
+        label: '加入过滤',
+      ),
+    );
+  }
 }
 
 void _showEmoteDialog(ModuleDynamicModel? moduleDynamic) {
@@ -89,44 +81,49 @@ void _showEmoteDialog(ModuleDynamicModel? moduleDynamic) {
       moduleDynamic.desc?.richTextNodes ??
       moduleDynamic.major?.opus?.summary?.richTextNodes;
   if (richTextNodes == null || richTextNodes.isEmpty) return;
-  final emotes = <String, Emoji>{};
-  for (final node in richTextNodes) {
-    final text = node.origText;
-    final emoji = node.emoji;
-    if (node.type == 'RICH_TEXT_NODE_TYPE_EMOJI' &&
-        text != null &&
-        emoji?.url != null) {
-      emotes.putIfAbsent(text, () => emoji!);
+  Map<String, Emoji>? emotes;
+  for (final e in richTextNodes) {
+    if (e.type == 'RICH_TEXT_NODE_TYPE_EMOJI') {
+      emotes ??= <String, Emoji>{};
+      if (!emotes.containsKey(e.origText)) {
+        emotes[e.origText!] = e.emoji!;
+      }
     }
   }
-  if (emotes.isEmpty) return;
-  final spans = <InlineSpan>[];
-  for (final entry in emotes.entries) {
-    if (spans.isNotEmpty) spans.add(const TextSpan(text: '\n\n'));
-    final emoji = entry.value;
-    final size = emoji.size * 25.0;
-    spans
-      ..add(
-        WidgetSpan(
-          child: NetworkImgLayer(
-            src: emoji.url!,
-            type: .emote,
-            width: size,
-            height: size,
-          ),
-        ),
-      )
-      ..add(TextSpan(text: '\n${entry.key}\n${emoji.url}'));
-  }
+  if (emotes == null || emotes.isEmpty) return;
   showDialog(
     context: Get.context!,
     builder: (context) => Dialog(
       child: Padding(
         padding: const .symmetric(horizontal: 20, vertical: 16),
-        child: SingleChildScrollView(
-          child: SelectionText.rich(
-            TextSpan(children: spans),
-            style: const TextStyle(fontSize: 15, height: 1.7),
+        child: SelectionArea(
+          contextMenuBuilder: openUrlMenuBuilder,
+          child: SingleChildScrollView(
+            child: Text.rich(
+              TextSpan(
+                children: emotes!.entries.mapIndexed(
+                  (i, e) {
+                    final emoji = e.value;
+                    final size = emoji.size * 25.0;
+                    return TextSpan(
+                      children: [
+                        if (i != 0) const TextSpan(text: '\n\n'),
+                        WidgetSpan(
+                          child: NetworkImgLayer(
+                            src: emoji.url,
+                            type: .emote,
+                            width: size,
+                            height: size,
+                          ),
+                        ),
+                        TextSpan(text: '\n${e.key}\n${emoji.url}'),
+                      ],
+                    );
+                  },
+                ).toList(),
+              ),
+              style: const TextStyle(fontSize: 15, height: 1.7),
+            ),
           ),
         ),
       ),
@@ -138,29 +135,24 @@ void _showTextDialog(String text) {
   showDialog(
     context: Get.context!,
     builder: (context) => Dialog(
-      constraints: const BoxConstraints.tightFor(width: 380),
       child: Padding(
         padding: const .symmetric(horizontal: 20, vertical: 16),
-        child: SelectionText(
-          text,
-          style: const TextStyle(fontSize: 15, height: 1.7),
+        child: SelectionArea(
           contextMenuBuilder: (_, state) {
-            final buttonItems = ensureSelectionMenuButtons(
-              state.contextMenuButtonItems,
-              selectedTextOf: () {
-                final value = state.textEditingValue;
-                final selection = value.selection;
-                if (!selection.isValid || selection.isCollapsed) return null;
-                return selection.textInside(value.text);
-              },
-              hideToolbar: state.hideToolbar,
-            );
+            final buttonItems = state.contextMenuButtonItems;
+            state.addLaunchMenuIfNeeded(buttonItems, index: 3);
             _addDynFilterItem(buttonItems, state);
             return AdaptiveTextSelectionToolbar.buttonItems(
               buttonItems: buttonItems,
               anchors: state.contextMenuAnchors,
             );
           },
+          child: SingleChildScrollView(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 15, height: 1.7),
+            ),
+          ),
         ),
       ),
     ),

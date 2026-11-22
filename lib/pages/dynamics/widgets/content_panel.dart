@@ -8,13 +8,15 @@ import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/pages/dynamics/widgets/rich_node_panel.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
+import 'package:PiliPlus/utils/extension/selectable_region_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:collection/collection.dart' show IterableExtension;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 
 part 'package:PiliPlus/common/widgets/context_menu/dyn_menu_helper.dart';
 
@@ -91,10 +93,10 @@ Widget content(
                   contextMenuBuilder: text == null || text.isEmpty
                       ? null
                       : (_, state) => dynTextMenuBuilder(
-                        state,
-                        text,
-                        moduleDynamic,
-                      ),
+                          state,
+                          text,
+                          item.modules.moduleDynamic,
+                        ),
                 )
               : custom_text.Text.rich(
                   style: floor == 1
